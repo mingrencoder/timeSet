@@ -3,14 +3,199 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
-import { Clock, AlertCircle, MonitorUp } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
+import { Clock, AlertCircle, MonitorUp, Download, RefreshCcw, FileEdit, CheckCircle, FolderTree, List as ListIcon, ChevronDown, ChevronRight, FileText } from 'lucide-react';
+import RenamePreviewModal from './components/RenamePreviewModal';
+import SyncTimePreviewModal from './components/SyncTimePreviewModal';
+
+const formatTime = (isoString: string) => {
+  return isoString.replace('T', ' ').replace('Z', '').split('.')[0];
+};
+
+const TreeNode: React.FC<{ node: any, level?: number }> = ({ node, level = 0 }) => {
+  const [isOpen, setIsOpen] = useState(true);
+
+  if (node.isFile) {
+    return (
+      <div className="flex items-center justify-between text-xs py-2 hover:bg-gray-50 border-b border-gray-50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
+        <div className="flex items-center min-w-0 pr-4">
+          <FileText className="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
+          <span className="text-gray-700 truncate font-medium" title={node.name}>{node.name}</span>
+        </div>
+        <div className="flex items-center flex-shrink-0 pr-4 space-x-6">
+           <span className="text-gray-500 w-16 text-right">{node.original.type === 'video' ? '视频' : '图片'}</span>
+           <span className="text-gray-800 font-mono w-40 text-right flex items-center justify-end">
+             {formatTime(node.original.date)}
+             {(!node.original.exifTime && node.original.mtime && node.original.timestamp === node.original.mtime) && (
+               <span className="ml-2 text-[10px] bg-orange-100 text-orange-600 px-1 py-0.5 rounded" title="无拍摄时间(EXIF/元数据)，当前显示为系统文件修改时间">系统时间</span>
+             )}
+           </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div 
+        className="flex items-center text-xs py-2 hover:bg-gray-100 cursor-pointer font-medium text-gray-700 transition-colors rounded-md" 
+        style={{ paddingLeft: `${level * 20}px` }}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        {isOpen ? <ChevronDown className="w-4 h-4 text-gray-500 mr-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 mr-1 flex-shrink-0" />}
+        <FolderTree className="w-4 h-4 text-indigo-500 mr-2 flex-shrink-0" />
+        {node.name}
+      </div>
+      {isOpen && (
+        <div className="mt-1">
+          {Object.values(node.children).map((child: any, idx) => (
+            <TreeNode key={idx} node={child} level={level + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function App() {
   const [loading, setLoading] = useState(false);
   const [inputPath, setInputPath] = useState('');
-  const [result, setResult] = useState<{ folderPath: string; total: number; results: Array<{ originalName: string; relativePath: string; timestamp: number; date: string; parseDuration: number; type: string }> } | null>(null);
+  const [result, setResult] = useState<{ folderPath: string; total: number; results: Array<any> } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'flat' | 'tree'>('flat');
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  
+  const sortedResults = useMemo(() => {
+    if (!result?.results) return [];
+    let sortableItems = [...result.results];
+    if (sortConfig !== null) {
+      sortableItems.sort((a, b) => {
+        let aValue = a[sortConfig.key];
+        let bValue = b[sortConfig.key];
+        
+        if (sortConfig.key === 'date') {
+          aValue = a.timestamp;
+          bValue = b.timestamp;
+        }
+
+        if (aValue < bValue) {
+          return sortConfig.direction === 'asc' ? -1 : 1;
+        }
+        if (aValue > bValue) {
+          return sortConfig.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return sortableItems;
+  }, [result, sortConfig]);
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const getSortIcon = (key: string) => {
+    if (!sortConfig || sortConfig.key !== key) return <span className="w-3 inline-block"></span>;
+    return sortConfig.direction === 'asc' ? <span className="ml-1 inline-block">↑</span> : <span className="ml-1 inline-block">↓</span>;
+  };
+
+  // 新增操作状态
+  const [processing, setProcessing] = useState(false);
+  const [progress, setProgress] = useState<{ type: string, current: number, total: number } | null>(null);
+  const [processResult, setProcessResult] = useState<{type: string, data: any} | null>(null);
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  // 1. 纯前端导出 XLSX
+  const handleExportXLSX = () => {
+    if (!result || result.results.length === 0) return;
+    const header = ['原始路径', '相对路径', '媒体类型', '13位时间戳', '格式化时间'];
+    
+    const rows = result.results.map(f => [
+        `${result.folderPath}/${f.relativePath}`, 
+        f.relativePath, 
+        f.type === 'video' ? '视频' : '图片',
+        f.timestamp, 
+        formatTime(f.date)
+    ]);
+    const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Timeline");
+    XLSX.writeFile(workbook, `timeline_export_${Date.now()}.xlsx`);
+  };
+
+  const handleOpenSyncModal = () => {
+    if (!result || result.results.length === 0) return;
+    setIsSyncModalOpen(true);
+  };
+
+  const executeStreamOp = async (url: string, body: any, type: string) => {
+    setProcessing(true);
+    setProcessResult(null);
+    setProgress({ type, current: 0, total: body.renamePlan ? body.renamePlan.length : body.syncPlan.length });
+    setError(null);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.body) throw new Error('ReadableStream not supported');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.type === 'progress') {
+              setProgress({ type, current: data.current, total: data.total });
+            } else if (data.type === 'done') {
+              setProcessResult({ type, data });
+            } else if (data.type === 'error') {
+              setError(data.error);
+            }
+          } catch (e) {
+            console.error('Failed to parse NDJSON line:', line, e);
+          }
+        }
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setProcessing(false);
+      setProgress(null);
+    }
+  };
+
+  const handleExecuteSyncFromModal = (syncPlan: any[]) => {
+    setIsSyncModalOpen(false);
+    executeStreamOp('/api/sync-time', { folderPath: result?.folderPath, syncPlan }, 'sync');
+  };
+
+  const handleOpenRenameModal = () => {
+    if (!result || result.results.length === 0) return;
+    setIsRenameModalOpen(true);
+  };
+
+  const handleExecuteRenameFromModal = (renamePlan: any[]) => {
+    setIsRenameModalOpen(false);
+    executeStreamOp('/api/rename-files', { folderPath: result?.folderPath, renamePlan }, 'rename');
+  };
 
   const handleScan = async () => {
     if (!inputPath.trim()) {
@@ -25,17 +210,14 @@ export default function App() {
     try {
       const response = await fetch('/api/scan-folder', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folderPath: inputPath.trim() }),
       });
-      if (!response.body) throw new Error('ReadableStream not supported in this browser.');
+      if (!response.body) throw new Error('ReadableStream not supported');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      
       let currentResult = { folderPath: '', total: 0, results: [] as any[] };
 
       while (true) {
@@ -50,25 +232,16 @@ export default function App() {
           if (!line.trim()) continue;
           try {
             const data = JSON.parse(line);
-            
-            if (data.type === 'log') {
-              console.log(data.message);
-            } else if (data.type === 'folder') {
+            if (data.type === 'folder') {
               currentResult.folderPath = data.path;
               setResult({ ...currentResult });
             } else if (data.type === 'file') {
               currentResult.results.unshift(data.result);
               currentResult.total++;
-              // 限制前端仅展示最新的 500 条数据，防止几十万数据直接把浏览器 DOM 撑爆 (OOM)
               if (currentResult.results.length > 500) {
                   currentResult.results.pop();
               }
-              // 每 10 个文件或使用 throttle 方式更新 state 更好，但对于测试可以直接更新
               setResult({ ...currentResult });
-            } else if (data.type === 'file_error') {
-              // 处理单个文件解析失败的情况（可选）
-            } else if (data.type === 'done') {
-              console.log('扫描完成，总计:', data.total);
             } else if (data.type === 'error') {
               setError(data.error);
             }
@@ -83,6 +256,29 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  const treeData = useMemo(() => {
+    if (!result || !result.results) return null;
+    const root = { name: result.folderPath.split(/[/\\]/).pop() || 'root', isFile: false, children: {} as any };
+    result.results.forEach(item => {
+      const parts = item.relativePath.split(/[/\\]/);
+      let current = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i];
+        if (!current.children[part]) {
+          current.children[part] = { name: part, isFile: false, children: {} };
+        }
+        current = current.children[part];
+      }
+      const fileName = parts[parts.length - 1];
+      current.children[fileName] = {
+        name: fileName,
+        isFile: true,
+        original: item
+      };
+    });
+    return root;
+  }, [result]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
@@ -129,38 +325,156 @@ export default function App() {
               <span className="text-gray-500 text-xs">扫描根目录:</span>
               <span className="text-gray-900 font-mono text-xs break-all">{result.folderPath}</span>
             </div>
+            
+            {/* 核心操作按钮组 */}
+            {result.results.length > 0 && !loading && (
+              <div className="mb-4 pt-4 border-t border-gray-200">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button
+                    onClick={handleExportXLSX}
+                    disabled={processing}
+                    className="flex-1 py-2 px-3 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>1. 导出时间线备份 (XLSX)</span>
+                  </button>
+                  <button
+                    onClick={handleOpenSyncModal}
+                    disabled={processing}
+                    className="flex-1 py-2 px-3 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
+                  >
+                    <RefreshCcw className="w-4 h-4" />
+                    <span>2. 恢复物理时间预览...</span>
+                  </button>
+                  <button
+                    onClick={handleOpenRenameModal}
+                    disabled={processing}
+                    className="flex-1 py-2 px-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
+                  >
+                    <FileEdit className="w-4 h-4" />
+                    <span>3. 规则重命名预览...</span>
+                  </button>
+                </div>
+
+                {/* 进度条 */}
+                {progress && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium text-gray-700">
+                        正在执行 {progress.type === 'sync' ? '时间恢复' : '重命名'}...
+                      </span>
+                      <span className="text-sm text-gray-500">{progress.current} / {progress.total}</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                      <div className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${Math.max(5, (progress.current / progress.total) * 100)}%` }}></div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* 操作结果提示 */}
+                {processResult && (
+                  <div className="mt-4 p-4 bg-green-50 text-green-800 text-sm rounded-lg border border-green-200 flex items-start space-x-3">
+                    <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-green-900">
+                        {processResult.type === 'sync' ? '时间同步完成' : '重命名完成'}
+                      </p>
+                      <p className="mt-1">成功: {processResult.data.successCount} 个文件</p>
+                      {processResult.data.errorCount > 0 && (
+                        <p className="text-red-600 mt-1 font-medium">失败: {processResult.data.errorCount} 个文件 (详见控制台)</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mb-3 flex justify-between items-center bg-gray-100 p-1.5 rounded-lg w-max">
+                <button 
+                  onClick={() => setViewMode('flat')} 
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'flat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                  <ListIcon className="w-4 h-4 mr-1.5" /> 列表视图
+                </button>
+                <button 
+                  onClick={() => setViewMode('tree')} 
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'tree' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                  <FolderTree className="w-4 h-4 mr-1.5" /> 目录视图
+                </button>
+            </div>
 
             <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded bg-white relative shadow-inner">
-              <table className="w-full text-left text-xs whitespace-nowrap">
-                <thead className="bg-gray-100 sticky top-0 shadow-sm z-10">
-                  <tr>
-                    <th className="px-4 py-3 font-medium text-gray-600">相对路径</th>
-                    <th className="px-4 py-3 font-medium text-gray-600">类型</th>
-                    <th className="px-4 py-3 font-medium text-gray-600">解析时间戳</th>
-                    <th className="px-4 py-3 font-medium text-gray-600">标准时间</th>
-                    <th className="px-4 py-3 font-medium text-gray-600 text-right">单文件耗时</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {result.results.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或文件不存在</td></tr>
-                  )}
-                  {result.results.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-2 font-mono text-gray-800 max-w-[200px] truncate" title={item.relativePath}>{item.relativePath}</td>
-                      <td className="px-4 py-2 text-gray-500">{item.type === 'video' ? '🎬 视频' : '🖼️ 图片'}</td>
-                      <td className="px-4 py-2 font-mono text-gray-500">{item.timestamp}</td>
-                      <td className="px-4 py-2 font-mono text-gray-800">{item.date}</td>
-                      <td className="px-4 py-2 text-right font-mono text-emerald-600">{item.parseDuration} ms</td>
+              {viewMode === 'flat' ? (
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-gray-100 sticky top-0 shadow-sm z-10">
+                    <tr>
+                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('relativePath')}>
+                        相对路径 {getSortIcon('relativePath')}
+                      </th>
+                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('type')}>
+                        类型 {getSortIcon('type')}
+                      </th>
+                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('timestamp')}>
+                        解析时间戳 {getSortIcon('timestamp')}
+                      </th>
+                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('date')}>
+                        标准时间 {getSortIcon('date')}
+                      </th>
+                      <th className="px-4 py-3 font-medium text-gray-600 text-right cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('parseDuration')}>
+                        单文件耗时 {getSortIcon('parseDuration')}
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {sortedResults.length === 0 && (
+                      <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或文件不存在</td></tr>
+                    )}
+                    {sortedResults.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-2 font-mono text-gray-800 max-w-[200px] truncate" title={item.relativePath}>{item.relativePath}</td>
+                        <td className="px-4 py-2 text-gray-500">{item.type === 'video' ? '视频' : '图片'}</td>
+                        <td className="px-4 py-2 font-mono text-gray-500">{item.timestamp}</td>
+                        <td className="px-4 py-2 font-mono text-gray-800">
+                          {formatTime(item.date)}
+                          {(!item.exifTime && item.mtime && item.timestamp === item.mtime) && (
+                             <span className="ml-2 text-[10px] bg-orange-100 text-orange-600 px-1 py-0.5 rounded" title="无拍摄时间(EXIF/元数据)，当前显示为系统文件修改时间">系统时间</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono text-emerald-600">{item.parseDuration} ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-4">
+                  {treeData && <TreeNode node={treeData} />}
+                </div>
+              )}
             </div>
             <div className="mt-2 text-right text-xs text-gray-400">
               * 为防止浏览器内存溢出(OOM)，前端仅展示最新解析的 {Math.min(500, result.total)} 条记录。
             </div>
           </div>
+        )}
+
+        {isRenameModalOpen && result && (
+          <RenamePreviewModal 
+            isOpen={isRenameModalOpen}
+            onClose={() => setIsRenameModalOpen(false)}
+            files={result.results}
+            folderPath={result.folderPath}
+            onExecute={handleExecuteRenameFromModal}
+          />
+        )}
+
+        {isSyncModalOpen && result && (
+          <SyncTimePreviewModal 
+            isOpen={isSyncModalOpen}
+            onClose={() => setIsSyncModalOpen(false)}
+            files={result.results}
+            onExecute={handleExecuteSyncFromModal}
+          />
         )}
       </div>
     </div>

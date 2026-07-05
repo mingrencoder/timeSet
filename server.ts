@@ -20,7 +20,7 @@ const upload = multer({ dest: 'uploads/' });
 /**
  * 解析图片时间 (提取 EXIF DateTimeOriginal)
  */
-async function parseImageTime(filePath: string): Promise<number> {
+async function parseImageTime(filePath: string): Promise<number | null> {
     let fd = null;
     try {
         fd = await fsPromises.open(filePath, 'r');
@@ -37,16 +37,10 @@ async function parseImageTime(filePath: string): Promise<number> {
             return tags.DateTimeOriginal * 1000;
         }
         
-        throw new Error("EXIF 中未找到 DateTimeOriginal");
+        return null;
     } catch (error: any) {
-        console.warn(`[图片解析警告] ${filePath} - ${error.message}，将使用系统修改时间(mtime)`);
-        try {
-            const stats = await fsPromises.stat(filePath);
-            return Math.round(stats.mtimeMs);
-        } catch (statError: any) {
-            console.warn(`[致命警告] 无法获取系统时间: ${statError.message}`);
-            return Date.now();
-        }
+        // 解析异常(如非标准图片或无EXIF)
+        return null;
     } finally {
         if (fd) {
             await fd.close();
@@ -57,7 +51,7 @@ async function parseImageTime(filePath: string): Promise<number> {
 /**
  * 解析视频时间 (提取 creation_time)
  */
-function parseVideoTime(filePath: string): Promise<number> {
+function parseVideoTime(filePath: string): Promise<number | null> {
     return new Promise((resolve) => {
         ffmpeg.ffprobe(filePath, async (err: any, metadata: any) => {
             try {
@@ -74,16 +68,9 @@ function parseVideoTime(filePath: string): Promise<number> {
                     }
                 }
                 
-                throw new Error("视频元数据中未找到有效的 creation_time");
+                resolve(null);
             } catch (error: any) {
-                console.warn(`[视频解析警告] ${filePath} - ${error.message}，将使用系统修改时间(mtime)`);
-                try {
-                    const stats = await fsPromises.stat(filePath);
-                    resolve(Math.round(stats.mtimeMs));
-                } catch (statError: any) {
-                    console.warn(`[致命警告] 无法获取系统时间: ${statError.message}`);
-                    resolve(Date.now());
-                }
+                resolve(null);
             }
         });
     });
@@ -163,22 +150,35 @@ async function startServer() {
                         try {
                             const relativePath = path.relative(baseDir, fullPath);
                             const startTime = Date.now();
-                            let timestamp;
+                            
+                            let stats;
+                            try {
+                                stats = await fsPromises.stat(fullPath);
+                            } catch (e) {
+                                stats = { mtimeMs: Date.now() }; // Fallback for stat error
+                            }
+                            const mtime = Math.round(stats.mtimeMs);
+                            
+                            let parsedTime;
                             
                             if (isVideo) {
-                                timestamp = await parseVideoTime(fullPath);
+                                parsedTime = await parseVideoTime(fullPath);
                             } else {
-                                timestamp = await parseImageTime(fullPath);
+                                parsedTime = await parseImageTime(fullPath);
                             }
                             
+                            const timestamp = parsedTime || mtime; // 兼容原逻辑
                             const parseDuration = Date.now() - startTime;
+                            
                             parsedCount++;
                             sendEvent({
                                 type: 'file',
                                 result: {
                                     originalName: entry.name,
                                     relativePath,
-                                    timestamp,
+                                    timestamp,       // default best-effort time
+                                    exifTime: parsedTime, // nullable
+                                    mtime,           // original mtime
                                     date: new Date(timestamp).toISOString(),
                                     parseDuration,
                                     type: isVideo ? 'video' : 'image'
@@ -211,6 +211,121 @@ async function startServer() {
     } catch (err: any) {
         sendEvent({ type: 'error', error: err.message });
         res.end();
+    }
+  });
+
+  // 接口1：物理时间同步 (流式进度)
+  app.post('/api/sync-time', async (req: express.Request, res: express.Response): Promise<any> => {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendEvent = (data: any) => {
+        res.write(JSON.stringify(data) + '\n');
+    };
+
+    try {
+      const { folderPath, syncPlan } = req.body;
+      if (!folderPath || !Array.isArray(syncPlan)) {
+        sendEvent({ type: 'error', error: '无效的请求参数' });
+        return res.end();
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+      const errors = [];
+      const total = syncPlan.length;
+
+      for (let i = 0; i < total; i++) {
+        const item = syncPlan[i];
+        try {
+          const fullPath = path.join(folderPath, item.relativePath);
+          const dateObj = new Date(item.targetTimestamp);
+          
+          await fsPromises.utimes(fullPath, dateObj, dateObj);
+          successCount++;
+        } catch (err: any) {
+          errorCount++;
+          errors.push({ path: item.relativePath, error: err.message });
+        }
+        
+        if (i % 10 === 0 || i === total - 1) {
+          sendEvent({ type: 'progress', current: i + 1, total });
+        }
+      }
+
+      sendEvent({ type: 'done', successCount, errorCount, errors });
+      res.end();
+    } catch (err: any) {
+      sendEvent({ type: 'error', error: err.message });
+      res.end();
+    }
+  });
+
+  // 接口2：规则重命名 (流式进度)
+  app.post('/api/rename-files', async (req: express.Request, res: express.Response): Promise<any> => {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendEvent = (data: any) => {
+        res.write(JSON.stringify(data) + '\n');
+    };
+
+    try {
+      const { folderPath, renamePlan } = req.body;
+      if (!folderPath || !Array.isArray(renamePlan)) {
+        sendEvent({ type: 'error', error: '无效的请求参数' });
+        return res.end();
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+      const errors = [];
+      const total = renamePlan.length;
+
+      for (let i = 0; i < total; i++) {
+        const item = renamePlan[i];
+        try {
+          const oldFullPath = path.join(folderPath, item.relativePath);
+          const ext = path.extname(item.originalName);
+          const newBaseName = item.newBaseName;
+          
+          const dirName = path.dirname(oldFullPath);
+          
+          let newFullPath = path.join(dirName, `${newBaseName}${ext}`);
+          let counter = 1;
+          
+          while (fs.existsSync(newFullPath)) {
+             if (oldFullPath === newFullPath) break;
+             
+             const suffix = `_${counter.toString().padStart(3, '0')}`;
+             newFullPath = path.join(dirName, `${newBaseName}${suffix}${ext}`);
+             counter++;
+          }
+          
+          if (oldFullPath !== newFullPath) {
+             await fsPromises.rename(oldFullPath, newFullPath);
+          }
+          
+          successCount++;
+        } catch (err: any) {
+          errorCount++;
+          errors.push({ path: item.relativePath, error: err.message });
+        }
+
+        if (i % 10 === 0 || i === total - 1) {
+          sendEvent({ type: 'progress', current: i + 1, total });
+        }
+      }
+
+      sendEvent({ type: 'done', successCount, errorCount, errors });
+      res.end();
+    } catch (err: any) {
+      sendEvent({ type: 'error', error: err.message });
+      res.end();
     }
   });
 

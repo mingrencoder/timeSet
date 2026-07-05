@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "timeSet",
+  "description": "Media file time management and renaming tool",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
