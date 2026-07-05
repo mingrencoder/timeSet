@@ -1,5 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, Plus, Trash2, Download, Play, FolderTree, List as ListIcon, FileText, ChevronRight, ChevronDown } from 'lucide-react';
+import { Pagination } from './Pagination';
+import { TableSelectMenu } from './TableSelectMenu';
 
 export type Rule = {
   id: string;
@@ -78,7 +80,7 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
   const [onlyDifferences, setOnlyDifferences] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(100);
 
   const previewData = useMemo(() => {
     return files.map(file => {
@@ -162,6 +164,7 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
       direction = 'desc';
     }
     setSortConfig({ key, direction });
+    setPage(1);
   };
 
   const getSortIcon = (key: string) => {
@@ -200,12 +203,25 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
      setSelectedPaths(newSet);
   };
 
-  const toggleAll = () => {
-     if (selectedPaths.size === filteredData.length) {
-         setSelectedPaths(new Set());
-     } else {
-         setSelectedPaths(new Set(filteredData.map(f => f.relativePath)));
-     }
+  const handleSelectPage = () => {
+    const newSet = new Set(selectedPaths);
+    const allPageChecked = paginatedData.length > 0 && paginatedData.every(f => newSet.has(f.relativePath));
+    if (allPageChecked) {
+      paginatedData.forEach(f => newSet.delete(f.relativePath));
+    } else {
+      paginatedData.forEach(f => newSet.add(f.relativePath));
+    }
+    setSelectedPaths(newSet);
+  };
+
+  const handleSelectAll = () => {
+    const newSet = new Set(selectedPaths);
+    filteredData.forEach(f => newSet.add(f.relativePath));
+    setSelectedPaths(newSet);
+  };
+
+  const handleSelectNone = () => {
+    setSelectedPaths(new Set());
   };
 
   if (!isOpen) return null;
@@ -372,30 +388,32 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-gray-50 sticky top-0 shadow-sm z-10 border-b border-gray-100">
                     <tr>
-                      <th className="px-6 py-3 font-semibold text-gray-600 w-1/2">
-                         <div className="flex items-center cursor-pointer select-none" onClick={() => requestSort('relativePath')}>
-                           <input 
-                             type="checkbox" 
-                             checked={selectedPaths.size > 0 && selectedPaths.size === filteredData.length}
-                             onChange={(e) => {
-                               e.stopPropagation();
-                               toggleAll();
-                             }}
-                             className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
-                           />
-                           原文件 (相对路径) {getSortIcon('relativePath')}
+                      <th className="px-6 py-3 font-semibold text-gray-600">
+                         <div className="resize-x overflow-hidden flex items-center min-w-[300px]">
+                           <div className="mr-3">
+                             <TableSelectMenu 
+                               isPageSelected={paginatedData.length > 0 && paginatedData.every(f => selectedPaths.has(f.relativePath))}
+                               onSelectPage={handleSelectPage}
+                               onSelectAll={handleSelectAll}
+                               onSelectNone={handleSelectNone}
+                               totalItems={filteredData.length}
+                             />
+                           </div>
+                           <span className="cursor-pointer select-none flex items-center" onClick={() => requestSort('relativePath')}>
+                             原文件 (相对路径) {getSortIcon('relativePath')}
+                           </span>
                          </div>
                       </th>
-                      <th className="px-6 py-3 font-semibold text-emerald-600 w-1/2">
-                         <div className="flex items-center justify-between">
-                            <span className="cursor-pointer select-none" onClick={() => requestSort('newName')}>
+                      <th className="px-6 py-3 font-semibold text-emerald-600">
+                         <div className="resize-x overflow-hidden flex items-center justify-between min-w-[300px]">
+                            <span className="cursor-pointer select-none flex-1" onClick={() => requestSort('newName')}>
                               新文件名预览 {getSortIcon('newName')}
                             </span>
-                            <label className="flex items-center space-x-2 text-gray-500 font-normal cursor-pointer bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors">
+                            <label className="flex items-center space-x-2 text-gray-500 font-normal cursor-pointer bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors ml-4">
                               <input 
                                 type="checkbox" 
                                 checked={onlyDifferences} 
-                                onChange={(e) => setOnlyDifferences(e.target.checked)} 
+                                onChange={(e) => { setOnlyDifferences(e.target.checked); setPage(1); }} 
                                 className="rounded text-indigo-600 focus:ring-indigo-500" 
                               />
                               <span>仅显示差异项</span>
@@ -407,18 +425,18 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
                   <tbody className="divide-y divide-gray-100">
                     {paginatedData.map((item, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-3 text-gray-500 truncate max-w-[200px]" title={item.relativePath}>
+                        <td className="px-6 py-3 text-gray-500 break-all" title={item.relativePath}>
                           <div className="flex items-center">
                             <input 
                                type="checkbox" 
                                checked={selectedPaths.has(item.relativePath)}
                                onChange={() => toggleSelection(item.relativePath)}
-                               className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
+                               className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300 flex-shrink-0"
                              />
-                             <span className="truncate">{item.relativePath}</span>
+                             <span>{item.relativePath}</span>
                           </div>
                         </td>
-                        <td className="px-6 py-3 font-mono truncate max-w-[200px]" title={item.newName}>
+                        <td className="px-6 py-3 font-mono break-all" title={item.newName}>
                           <div className="flex items-center space-x-2">
                              {item.hasChanged ? (
                                 <span className="text-emerald-600 font-medium">{item.newName}</span>
@@ -441,7 +459,7 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
                        <input 
                          type="checkbox" 
                          checked={onlyDifferences} 
-                         onChange={(e) => setOnlyDifferences(e.target.checked)} 
+                         onChange={(e) => { setOnlyDifferences(e.target.checked); setPage(1); }} 
                          className="rounded text-indigo-600 focus:ring-indigo-500" 
                        />
                        <span>仅显示差异项</span>
@@ -454,36 +472,29 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
 
             {/* Pagination & Action */}
             <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center bg-gray-50/80 backdrop-blur">
-              {viewMode === 'flat' ? (
-                <div className="flex items-center space-x-4 text-xs text-gray-600 font-medium">
-                  <button 
-                    disabled={page === 1} 
-                    onClick={() => setPage(page - 1)}
-                    className="px-3 py-1.5 border border-gray-200 bg-white rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors shadow-sm"
-                  >
-                    上一页
-                  </button>
-                  <span>{page} / {totalPages || 1} (已选 {selectedPaths.size}/{filteredData.length} 项)</span>
-                  <button 
-                    disabled={page === totalPages || totalPages === 0} 
-                    onClick={() => setPage(page + 1)}
-                    className="px-3 py-1.5 border border-gray-200 bg-white rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors shadow-sm"
-                  >
-                    下一页
-                  </button>
-                </div>
-              ) : (
-                <div className="text-xs font-medium text-gray-600">已选 {selectedPaths.size} / {filteredData.length} 项</div>
-              )}
-
-              <button 
-                onClick={executeRename}
-                disabled={selectedPaths.size === 0}
-                className="px-6 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 transition-all flex items-center shadow-md"
-              >
-                <Play className="w-4 h-4 mr-2" />
-                执行选中的 {selectedPaths.size} 项重命名
-              </button>
+              <div className="flex-1 mr-4">
+                {viewMode === 'flat' ? (
+                  <Pagination 
+                    page={page} 
+                    pageSize={pageSize} 
+                    totalItems={filteredData.length} 
+                    onPageChange={setPage} 
+                    onPageSizeChange={setPageSize} 
+                  />
+                ) : (
+                  <div className="text-xs font-medium text-gray-600 mt-4 bg-gray-50 p-2 rounded border border-gray-100 flex items-center h-[52px]">已选 {selectedPaths.size} / {filteredData.length} 项</div>
+                )}
+              </div>
+              <div className="flex-shrink-0 mt-4">
+                <button 
+                  onClick={executeRename}
+                  disabled={selectedPaths.size === 0}
+                  className="px-6 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 transition-all flex items-center shadow-md"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  执行选中的 {selectedPaths.size} 项重命名
+                </button>
+              </div>
             </div>
           </div>
         </div>

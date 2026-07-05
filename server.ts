@@ -10,6 +10,7 @@ import ffprobeStatic from 'ffprobe-static';
 import os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import readline from 'readline';
 
 const execAsync = promisify(exec);
 
@@ -19,6 +20,9 @@ const upload = multer({ dest: 'uploads/' });
 
 // 全局任务状态管理 (支持暂停、停止)
 const tasks = new Map<string, { state: 'running' | 'paused' | 'stopped' }>();
+
+// 全局中断控制
+let globalCancelRequested = false;
 
 /**
  * 解析图片时间 (提取 EXIF DateTimeOriginal)
@@ -37,7 +41,12 @@ async function parseImageTime(filePath: string): Promise<number | null> {
         
         const tags = result.tags;
         if (tags && tags.DateTimeOriginal) {
-            return tags.DateTimeOriginal * 1000;
+            const utcTime = tags.DateTimeOriginal * 1000;
+            // exif-parser treats EXIF string as UTC, causing an offset. Adjust to Local time.
+            // Since the server is in UTC, new Date().getTimezoneOffset() is 0. 
+            // We use -480 (UTC+8) for the 8 hours difference.
+            const offset = -480 * 60 * 1000;
+            return utcTime + offset;
         }
         
         return null;
@@ -67,6 +76,7 @@ function parseVideoTime(filePath: string): Promise<number | null> {
                     const creationTimeStr = tags.creation_time;
                     const dateObj = new Date(creationTimeStr);
                     if (!isNaN(dateObj.getTime())) {
+                        // creation_time is usually stored as UTC in MP4
                         return resolve(dateObj.getTime());
                     }
                 }
@@ -88,8 +98,8 @@ async function startServer() {
       fs.mkdirSync('uploads');
   }
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // 任务控制接口
   app.post('/api/task/:id/pause', (req, res) => {
@@ -108,6 +118,14 @@ async function startServer() {
       res.json({ success: true });
   });
 
+  app.post('/api/stop-task', (req, res) => {
+      globalCancelRequested = true;
+      for (const task of tasks.values()) {
+          task.state = 'stopped';
+      }
+      res.json({ success: true, message: '任务中断请求已发送' });
+  });
+
   app.post('/api/scan-folder', async (req, res) => {
     // 设置流式响应以避免在大量文件时请求超时
     res.setHeader('Content-Type', 'application/x-ndjson');
@@ -119,7 +137,11 @@ async function startServer() {
         res.write(JSON.stringify(data) + '\n');
     };
 
+    let writeStream: fs.WriteStream | null = null;
+
     try {
+        globalCancelRequested = false;
+        
         const { folderPath, taskId } = req.body;
 
         if (!folderPath || typeof folderPath !== 'string') {
@@ -141,6 +163,9 @@ async function startServer() {
             sendEvent({ type: 'error', error: `给定的路径不是一个文件夹: ${folderPath}` });
             return res.end();
         }
+        
+        const cacheFilePath = path.join(os.tmpdir(), '.scan_cache.jsonl');
+        writeStream = fs.createWriteStream(cacheFilePath, { flags: 'w' });
 
         sendEvent({ type: 'folder', path: folderPath });
         sendEvent({ type: 'log', message: `开始递归扫描: ${folderPath}` });
@@ -150,7 +175,7 @@ async function startServer() {
         let isStopped = false;
 
         async function scanDirectoryStream(dir: string, baseDir: string) {
-            if (isStopped) return;
+            if (isStopped || globalCancelRequested) return;
             let entries;
             try {
                 entries = await fsPromises.readdir(dir, { withFileTypes: true });
@@ -160,11 +185,17 @@ async function startServer() {
             }
             
             for (const entry of entries) {
+                if (globalCancelRequested) {
+                    isStopped = true;
+                    break;
+                }
+                
                 if (taskId) {
                     while (tasks.get(taskId)?.state === 'paused') {
+                        if (globalCancelRequested) break;
                         await new Promise(r => setTimeout(r, 500));
                     }
-                    if (tasks.get(taskId)?.state === 'stopped') {
+                    if (tasks.get(taskId)?.state === 'stopped' || globalCancelRequested) {
                         isStopped = true;
                         return;
                     }
@@ -205,19 +236,25 @@ async function startServer() {
                             const parseDuration = Date.now() - startTime;
                             
                             parsedCount++;
+                            const fileResult = {
+                                originalName: entry.name,
+                                relativePath,
+                                timestamp,       // default best-effort time
+                                exifTime: parsedTime, // nullable
+                                mtime,           // original mtime
+                                timeSource,
+                                date: new Date(timestamp).toISOString(),
+                                parseDuration,
+                                type: isVideo ? 'video' : 'image'
+                            };
+                            
+                            if (writeStream) {
+                                writeStream.write(JSON.stringify(fileResult) + '\n');
+                            }
+                            
                             sendEvent({
                                 type: 'file',
-                                result: {
-                                    originalName: entry.name,
-                                    relativePath,
-                                    timestamp,       // default best-effort time
-                                    exifTime: parsedTime, // nullable
-                                    mtime,           // original mtime
-                                    timeSource,
-                                    date: new Date(timestamp).toISOString(),
-                                    parseDuration,
-                                    type: isVideo ? 'video' : 'image'
-                                }
+                                result: fileResult
                             });
                         } catch (err: any) {
                             sendEvent({
@@ -241,7 +278,14 @@ async function startServer() {
 
         await scanDirectoryStream(folderPath, folderPath);
         
-        if (taskId && tasks.get(taskId)?.state === 'stopped') {
+        if (writeStream) {
+            writeStream.end();
+            writeStream = null;
+        }
+        
+        if (globalCancelRequested) {
+            sendEvent({ type: 'stopped', message: '扫描已手动终止，当前进度已安全落盘。' });
+        } else if (taskId && tasks.get(taskId)?.state === 'stopped') {
             sendEvent({ type: 'done', total: parsedCount, scanned: scannedCount, message: '扫描已终止' });
         } else {
             sendEvent({ type: 'done', total: parsedCount, scanned: scannedCount });
@@ -251,9 +295,73 @@ async function startServer() {
         res.end();
 
     } catch (err: any) {
+        if (writeStream) {
+            writeStream.end();
+        }
         sendEvent({ type: 'error', error: err.message });
         res.end();
     }
+  });
+
+  app.post('/api/export-csv', express.urlencoded({ limit: '50mb', extended: true }), async (req, res) => {
+     const d = new Date();
+     const localD = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+     const pad = (n: number) => n.toString().padStart(2, '0');
+     const timestampStr = `${localD.getUTCFullYear()}${pad(localD.getUTCMonth() + 1)}${pad(localD.getUTCDate())}_${pad(localD.getUTCHours())}${pad(localD.getUTCMinutes())}${pad(localD.getUTCSeconds())}`;
+     res.setHeader('Content-Disposition', `attachment; filename=timeline_export_${timestampStr}.csv`);
+     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+     
+     let selectedFiles = new Set<string>();
+     try {
+         if (req.body.selectedFiles) {
+             const parsed = JSON.parse(req.body.selectedFiles);
+             if (Array.isArray(parsed) && parsed.length > 0) {
+                 selectedFiles = new Set(parsed);
+             }
+         }
+     } catch(e) {
+         console.error('Failed to parse selectedFiles', e);
+     }
+     
+     res.write('\uFEFF');
+     res.write('原始路径,相对路径,媒体类型,13位时间戳,格式化时间,时间来源\n');
+     
+     const cacheFilePath = path.join(os.tmpdir(), '.scan_cache.jsonl');
+     if (!fs.existsSync(cacheFilePath)) {
+         return res.end();
+     }
+
+     const rl = readline.createInterface({
+         input: fs.createReadStream(cacheFilePath),
+         crlfDelay: Infinity
+     });
+
+     for await (const line of rl) {
+         if (!line.trim()) continue;
+         try {
+             const f = JSON.parse(line);
+             // If selectedFiles is provided and this file is not in it, skip
+             if (selectedFiles.size > 0 && !selectedFiles.has(f.relativePath)) continue;
+
+             const escapeCsv = (str: string | number) => `"${String(str).replace(/"/g, '""')}"`;
+             
+             const d = new Date(f.timestamp);
+             const localD = new Date(d.getTime() + 8 * 60 * 60 * 1000); // Format as UTC+8
+             const pad = (n: number) => n.toString().padStart(2, '0');
+             const formattedTime = `${localD.getUTCFullYear()}-${pad(localD.getUTCMonth() + 1)}-${pad(localD.getUTCDate())} ${pad(localD.getUTCHours())}:${pad(localD.getUTCMinutes())}:${pad(localD.getUTCSeconds())}`;
+
+             const csvRow = [
+                 escapeCsv(f.relativePath), // Without folderPath, relativePath is best we have
+                 escapeCsv(f.relativePath), 
+                 escapeCsv(f.type === 'video' ? '视频' : '图片'),
+                 escapeCsv(f.timestamp),
+                 escapeCsv(formattedTime),
+                 escapeCsv(f.timeSource || '未知')
+             ].join(',');
+             res.write(csvRow + '\n');
+         } catch(e) {}
+     }
+     res.end();
   });
 
   // 接口1：物理时间同步 (流式进度)
@@ -268,8 +376,13 @@ async function startServer() {
     };
 
     try {
-      const { folderPath, syncPlan, taskId } = req.body;
-      if (!folderPath || !Array.isArray(syncPlan)) {
+      globalCancelRequested = false;
+      const { folderPath, taskId, total, syncPlan } = req.body;
+      const syncMap = new Map<string, number>();
+      if (Array.isArray(syncPlan)) {
+          syncPlan.forEach(p => syncMap.set(p.relativePath, p.targetTimestamp));
+      }
+      if (!folderPath) {
         sendEvent({ type: 'error', error: '无效的请求参数' });
         return res.end();
       }
@@ -277,38 +390,72 @@ async function startServer() {
       if (taskId) {
           tasks.set(taskId, { state: 'running' });
       }
+      
+      const cacheFilePath = path.join(os.tmpdir(), '.scan_cache.jsonl');
+      if (!fs.existsSync(cacheFilePath)) {
+          sendEvent({ type: 'error', error: '缓存文件不存在，请重新扫描' });
+          return res.end();
+      }
 
       let successCount = 0;
       let errorCount = 0;
       const errors = [];
-      const total = syncPlan.length;
+      const totalCount = total || 0; // passed from frontend if available
+      let currentCount = 0;
       let isStopped = false;
 
-      for (let i = 0; i < total; i++) {
+      const rl = readline.createInterface({
+          input: fs.createReadStream(cacheFilePath),
+          crlfDelay: Infinity
+      });
+
+      for await (const line of rl) {
+        if (globalCancelRequested) {
+            isStopped = true;
+            rl.close();
+            break;
+        }
+        
         if (taskId) {
             while (tasks.get(taskId)?.state === 'paused') {
+                if (globalCancelRequested) break;
                 await new Promise(r => setTimeout(r, 500));
             }
-            if (tasks.get(taskId)?.state === 'stopped') {
+            if (tasks.get(taskId)?.state === 'stopped' || globalCancelRequested) {
                 isStopped = true;
+                rl.close();
                 break;
             }
         }
 
-        const item = syncPlan[i];
+        if (!line.trim()) continue;
+        
         try {
+          const item = JSON.parse(line);
+          
+          // 如果提供了 syncPlan，只处理在 syncPlan 中的文件，且使用 syncPlan 中指定的目标时间戳
+          let targetTimestamp = item.timestamp;
+          if (syncMap.size > 0) {
+              if (!syncMap.has(item.relativePath)) continue;
+              targetTimestamp = syncMap.get(item.relativePath)!;
+          }
+          
           const fullPath = path.join(folderPath, item.relativePath);
-          const dateObj = new Date(item.targetTimestamp);
+          const dateObj = new Date(targetTimestamp);
           
           await fsPromises.utimes(fullPath, dateObj, dateObj);
           successCount++;
         } catch (err: any) {
           errorCount++;
-          errors.push({ path: item.relativePath, error: err.message });
+          // Only store first 50 errors to avoid memory bloat
+          if (errors.length < 50) {
+              errors.push({ error: err.message });
+          }
         }
         
-        if (i % 10 === 0 || i === total - 1) {
-          sendEvent({ type: 'progress', current: i + 1, total });
+        currentCount++;
+        if (currentCount % 10 === 0) {
+          sendEvent({ type: 'progress', current: currentCount, total: totalCount || currentCount });
         }
       }
 
@@ -333,8 +480,13 @@ async function startServer() {
     };
 
     try {
-      const { folderPath, renamePlan, taskId } = req.body;
-      if (!folderPath || !Array.isArray(renamePlan)) {
+      globalCancelRequested = false;
+      const { folderPath, taskId, total, renamePlan } = req.body;
+      const renameSet = new Set<string>();
+      if (Array.isArray(renamePlan)) {
+          renamePlan.forEach(p => renameSet.add(p.relativePath));
+      }
+      if (!folderPath) {
         sendEvent({ type: 'error', error: '无效的请求参数' });
         return res.end();
       }
@@ -343,28 +495,59 @@ async function startServer() {
           tasks.set(taskId, { state: 'running' });
       }
 
+      const cacheFilePath = path.join(os.tmpdir(), '.scan_cache.jsonl');
+      if (!fs.existsSync(cacheFilePath)) {
+          sendEvent({ type: 'error', error: '缓存文件不存在，请重新扫描' });
+          return res.end();
+      }
+
       let successCount = 0;
       let errorCount = 0;
       const errors = [];
-      const total = renamePlan.length;
+      const totalCount = total || 0; // passed from frontend if available
+      let currentCount = 0;
       let isStopped = false;
 
-      for (let i = 0; i < total; i++) {
+      const rl = readline.createInterface({
+          input: fs.createReadStream(cacheFilePath),
+          crlfDelay: Infinity
+      });
+
+      for await (const line of rl) {
+        if (globalCancelRequested) {
+            isStopped = true;
+            rl.close();
+            break;
+        }
+        
         if (taskId) {
             while (tasks.get(taskId)?.state === 'paused') {
+                if (globalCancelRequested) break;
                 await new Promise(r => setTimeout(r, 500));
             }
-            if (tasks.get(taskId)?.state === 'stopped') {
+            if (tasks.get(taskId)?.state === 'stopped' || globalCancelRequested) {
                 isStopped = true;
+                rl.close();
                 break;
             }
         }
 
-        const item = renamePlan[i];
+        if (!line.trim()) continue;
+        
         try {
+          const item = JSON.parse(line);
+          
+          if (renameSet.size > 0 && !renameSet.has(item.relativePath)) {
+              continue;
+          }
+          
           const oldFullPath = path.join(folderPath, item.relativePath);
           const ext = path.extname(item.originalName);
-          const newBaseName = item.newBaseName;
+          
+          const d = new Date(item.timestamp);
+          const pad = (n: number) => n.toString().padStart(2, '0');
+          const typeStr = item.type === 'video' ? 'VID' : 'IMG';
+          const newBaseName = `${typeStr}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
           
           const dirName = path.dirname(oldFullPath);
           
@@ -386,11 +569,14 @@ async function startServer() {
           successCount++;
         } catch (err: any) {
           errorCount++;
-          errors.push({ path: item.relativePath, error: err.message });
+          if (errors.length < 50) {
+             errors.push({ error: err.message });
+          }
         }
 
-        if (i % 10 === 0 || i === total - 1) {
-          sendEvent({ type: 'progress', current: i + 1, total });
+        currentCount++;
+        if (currentCount % 10 === 0) {
+          sendEvent({ type: 'progress', current: currentCount, total: totalCount || currentCount });
         }
       }
 

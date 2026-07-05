@@ -7,18 +7,29 @@ import React, { useState, useMemo } from 'react';
 import { Clock, AlertCircle, MonitorUp, Download, RefreshCcw, FileEdit, CheckCircle, FolderTree, List as ListIcon, ChevronDown, ChevronRight, FileText, Filter, Pause, Play, Square } from 'lucide-react';
 import RenamePreviewModal from './components/RenamePreviewModal';
 import SyncTimePreviewModal from './components/SyncTimePreviewModal';
+import { Pagination } from './components/Pagination';
+import { TableSelectMenu } from './components/TableSelectMenu';
 
 const formatTime = (isoString: string) => {
-  return isoString.replace('T', ' ').replace('Z', '').split('.')[0];
+  const d = new Date(isoString);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 
-const TreeNode: React.FC<{ node: any, level?: number }> = ({ node, level = 0 }) => {
+const TreeNode: React.FC<{ node: any, level?: number, selectedFiles?: Set<string>, onToggleSelect?: (path: string) => void }> = ({ node, level = 0, selectedFiles, onToggleSelect }) => {
   const [isOpen, setIsOpen] = useState(true);
 
   if (node.isFile) {
+    const isSelected = selectedFiles?.has(node.original.relativePath);
     return (
       <div className="flex items-center justify-between text-xs py-2 hover:bg-gray-50 border-b border-gray-50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
         <div className="flex items-center min-w-0 pr-4">
+          <input 
+            type="checkbox" 
+            checked={isSelected}
+            onChange={() => onToggleSelect && onToggleSelect(node.original.relativePath)}
+            className="mr-2 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+          />
           <FileText className="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
           <span className="text-gray-700 truncate font-medium" title={node.name}>{node.name}</span>
         </div>
@@ -33,9 +44,6 @@ const TreeNode: React.FC<{ node: any, level?: number }> = ({ node, level = 0 }) 
            </span>
            <span className="text-gray-800 font-mono w-40 text-right flex items-center justify-end">
              {formatTime(node.original.date)}
-             {(!node.original.exifTime && node.original.mtime && node.original.timestamp === node.original.mtime) && (
-               <span className="ml-2 text-[10px] bg-orange-100 text-orange-600 px-1 py-0.5 rounded" title="无拍摄时间(EXIF/元数据)，当前显示为系统文件修改时间">系统时间</span>
-             )}
            </span>
         </div>
       </div>
@@ -56,7 +64,7 @@ const TreeNode: React.FC<{ node: any, level?: number }> = ({ node, level = 0 }) 
       {isOpen && (
         <div className="mt-1">
           {Object.values(node.children).map((child: any, idx) => (
-            <TreeNode key={idx} node={child} level={level + 1} />
+            <TreeNode key={idx} node={child} level={level + 1} selectedFiles={selectedFiles} onToggleSelect={onToggleSelect} />
           ))}
         </div>
       )}
@@ -72,6 +80,9 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'flat' | 'tree'>('flat');
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [timeSourceFilter, setTimeSourceFilter] = useState<string>('all');
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   
   const sortedResults = useMemo(() => {
     if (!result?.results) return [];
@@ -103,12 +114,16 @@ export default function App() {
     return sortableItems;
   }, [result, sortConfig, timeSourceFilter]);
 
+  const totalPages = Math.ceil(sortedResults.length / pageSize);
+  const paginatedResults = sortedResults.slice((page - 1) * pageSize, page * pageSize);
+
   const requestSort = (key: string) => {
     let direction: 'asc' | 'desc' = 'asc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
       direction = 'desc';
     }
     setSortConfig({ key, direction });
+    setPage(1);
   };
 
   const getSortIcon = (key: string) => {
@@ -128,59 +143,55 @@ export default function App() {
   const generateTaskId = () => Math.random().toString(36).substring(2, 15);
 
   const handleTaskAction = async (action: 'pause' | 'resume' | 'stop') => {
+    if (action === 'stop') {
+      try {
+        await fetch('/api/stop-task', { method: 'POST' });
+        setTaskState('stopped');
+      } catch (e) {
+        console.error(e);
+      }
+      return;
+    }
+    
     if (!taskId) return;
     try {
       await fetch(`/api/task/${taskId}/${action}`, { method: 'POST' });
-      setTaskState(action === 'stop' ? 'stopped' : action === 'pause' ? 'paused' : 'running');
+      setTaskState(action === 'pause' ? 'paused' : 'running');
     } catch (e) {
       console.error(e);
     }
   };
 
-  // 1. 纯前端导出 CSV
   const handleExportCSV = () => {
-    if (!result || result.results.length === 0) return;
-    const header = ['原始路径', '相对路径', '媒体类型', '13位时间戳', '格式化时间', '时间来源'];
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/api/export-csv';
+    form.target = '_blank';
     
-    const dataToExport = timeSourceFilter === 'all' 
-      ? result.results 
-      : result.results.filter(f => f.timeSource === timeSourceFilter);
-      
-    const rows = dataToExport.map(f => [
-        `${result.folderPath}/${f.relativePath}`, 
-        f.relativePath, 
-        f.type === 'video' ? '视频' : '图片',
-        f.timestamp, 
-        formatTime(f.date),
-        f.timeSource || '未知'
-    ]);
-
-    const escapeCsv = (str: string | number) => `"${String(str).replace(/"/g, '""')}"`;
-    const csvContent = [
-      header.map(escapeCsv).join(','),
-      ...rows.map(row => row.map(escapeCsv).join(','))
-    ].join('\n');
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'selectedFiles';
+    input.value = JSON.stringify(Array.from(selectedFiles));
     
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `timeline_export_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
   };
 
   const handleOpenSyncModal = () => {
     if (!result || result.results.length === 0) return;
+    if (selectedFiles.size === 0) {
+      alert("请先勾选需要恢复数据的文件。");
+      return;
+    }
     setIsSyncModalOpen(true);
   };
 
   const executeStreamOp = async (url: string, body: any, type: string) => {
     setProcessing(true);
     setProcessResult(null);
-    setProgress({ type, current: 0, total: body.renamePlan ? body.renamePlan.length : body.syncPlan.length });
+    setProgress({ type, current: 0, total: body.total || 0 });
     setError(null);
     
     const newTaskId = generateTaskId();
@@ -216,6 +227,9 @@ export default function App() {
               setProcessResult({ type, data });
             } else if (data.type === 'error') {
               setError(data.error);
+            } else if (data.type === 'stopped') {
+              setProcessResult({ type, data: { stopped: true, successCount: data.successCount || 0, errorCount: data.errorCount || 0 } });
+              setError('任务已手动停止');
             }
           } catch (e) {
             console.error('Failed to parse NDJSON line:', line, e);
@@ -234,7 +248,7 @@ export default function App() {
 
   const handleExecuteSyncFromModal = (syncPlan: any[]) => {
     setIsSyncModalOpen(false);
-    executeStreamOp('/api/sync-time', { folderPath: result?.folderPath, syncPlan }, 'sync');
+    executeStreamOp('/api/sync-time', { folderPath: result?.folderPath, syncPlan, total: syncPlan.length || result?.total }, 'sync');
   };
 
   const handleOpenRenameModal = () => {
@@ -244,7 +258,7 @@ export default function App() {
 
   const handleExecuteRenameFromModal = (renamePlan: any[]) => {
     setIsRenameModalOpen(false);
-    executeStreamOp('/api/rename-files', { folderPath: result?.folderPath, renamePlan }, 'rename');
+    executeStreamOp('/api/rename-files', { folderPath: result?.folderPath, renamePlan, total: renamePlan.length || result?.total }, 'rename');
   };
 
   const handleScan = async () => {
@@ -256,6 +270,7 @@ export default function App() {
     setLoading(true);
     setError(null);
     setResult({ folderPath: '', total: 0, results: [] });
+    setSelectedFiles(new Set());
 
     const newTaskId = generateTaskId();
     setTaskId(newTaskId);
@@ -292,10 +307,9 @@ export default function App() {
             } else if (data.type === 'file') {
               currentResult.results.unshift(data.result);
               currentResult.total++;
-              if (currentResult.results.length > 500) {
-                  currentResult.results.pop();
-              }
               setResult({ ...currentResult });
+            } else if (data.type === 'stopped') {
+              setError('任务已手动停止');
             } else if (data.type === 'error') {
               setError(data.error);
             }
@@ -311,6 +325,35 @@ export default function App() {
       setTaskId(null);
       setTaskState('stopped');
     }
+  };
+
+  const handleSelectPage = () => {
+    const newSet = new Set(selectedFiles);
+    const allPageChecked = paginatedResults.length > 0 && paginatedResults.every(f => newSet.has(f.relativePath));
+    
+    if (allPageChecked) {
+      paginatedResults.forEach(f => newSet.delete(f.relativePath));
+    } else {
+      paginatedResults.forEach(f => newSet.add(f.relativePath));
+    }
+    setSelectedFiles(newSet);
+  };
+
+  const handleSelectAll = () => {
+    const newSet = new Set(selectedFiles);
+    sortedResults.forEach(f => newSet.add(f.relativePath));
+    setSelectedFiles(newSet);
+  };
+
+  const handleSelectNone = () => {
+    setSelectedFiles(new Set());
+  };
+
+  const handleToggleSelect = (relativePath: string) => {
+    const next = new Set(selectedFiles);
+    if (next.has(relativePath)) next.delete(relativePath);
+    else next.add(relativePath);
+    setSelectedFiles(next);
   };
 
   const treeData = useMemo(() => {
@@ -403,7 +446,7 @@ export default function App() {
               {taskState !== 'stopped' && (
                 <button onClick={() => handleTaskAction('stop')} className="px-3 py-1.5 bg-white border border-red-200 text-red-600 rounded text-xs font-medium hover:bg-red-50 transition-colors flex items-center space-x-1 shadow-sm">
                   <Square className="w-3.5 h-3.5" />
-                  <span>停止</span>
+                  <span>停止/取消当前任务</span>
                 </button>
               )}
             </div>
@@ -423,20 +466,20 @@ export default function App() {
             </div>
             
             {/* 核心操作按钮组 */}
-            {result.results.length > 0 && !loading && (
+            {result.results.length > 0 && (!loading || taskState === 'paused') && (
               <div className="mb-4 pt-4 border-t border-gray-200">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <button
                     onClick={handleExportCSV}
-                    disabled={processing}
+                    disabled={processing || (loading && taskState !== 'paused')}
                     className="flex-1 py-2 px-3 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
                   >
                     <Download className="w-4 h-4" />
-                    <span>1. 导出时间线备份 (CSV)</span>
+                    <span>1. 导出 CSV {selectedFiles.size > 0 ? `(${selectedFiles.size} 项)` : '(全部)'}</span>
                   </button>
                   <button
                     onClick={handleOpenSyncModal}
-                    disabled={processing}
+                    disabled={processing || (loading && taskState !== 'paused')}
                     className="flex-1 py-2 px-3 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
                   >
                     <RefreshCcw className="w-4 h-4" />
@@ -444,7 +487,7 @@ export default function App() {
                   </button>
                   <button
                     onClick={handleOpenRenameModal}
-                    disabled={processing}
+                    disabled={processing || (loading && taskState !== 'paused')}
                     className="flex-1 py-2 px-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
                   >
                     <FileEdit className="w-4 h-4" />
@@ -507,7 +550,7 @@ export default function App() {
                   <span className="text-gray-600 font-medium">时间来源:</span>
                   <select 
                     value={timeSourceFilter}
-                    onChange={(e) => setTimeSourceFilter(e.target.value)}
+                    onChange={(e) => { setTimeSourceFilter(e.target.value); setPage(1); }}
                     className="border-none bg-white rounded-md py-1 px-2 shadow-sm focus:ring-1 focus:ring-indigo-500 text-gray-700 outline-none"
                   >
                     <option value="all">全部来源</option>
@@ -522,8 +565,18 @@ export default function App() {
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-gray-100 sticky top-0 shadow-sm z-10">
                     <tr>
+                      <th className="px-4 py-3 font-medium text-gray-600 w-14 text-center">
+                        <TableSelectMenu 
+                          isPageSelected={paginatedResults.length > 0 && paginatedResults.every(f => selectedFiles.has(f.relativePath))}
+                          isAllSelected={sortedResults.length > 0 && sortedResults.every(f => selectedFiles.has(f.relativePath))}
+                          onSelectPage={handleSelectPage}
+                          onSelectAll={handleSelectAll}
+                          onSelectNone={handleSelectNone}
+                          totalItems={sortedResults.length}
+                        />
+                      </th>
                       <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('relativePath')}>
-                        相对路径 {getSortIcon('relativePath')}
+                        <div className="resize-x overflow-hidden flex items-center min-w-[300px]">相对路径 {getSortIcon('relativePath')}</div>
                       </th>
                       <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('type')}>
                         类型 {getSortIcon('type')}
@@ -544,11 +597,19 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {sortedResults.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或符合条件的文件</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或符合条件的文件</td></tr>
                     )}
-                    {sortedResults.map((item, idx) => (
+                    {paginatedResults.map((item, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 py-2 font-mono text-gray-800 max-w-[200px] truncate" title={item.relativePath}>{item.relativePath}</td>
+                        <td className="px-4 py-2 text-center">
+                          <input 
+                            type="checkbox" 
+                            className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            checked={selectedFiles.has(item.relativePath)}
+                            onChange={() => handleToggleSelect(item.relativePath)}
+                          />
+                        </td>
+                        <td className="px-4 py-2 font-mono text-gray-800 break-all" title={item.relativePath}>{item.relativePath}</td>
                         <td className="px-4 py-2 text-gray-500">{item.type === 'video' ? '视频' : '图片'}</td>
                         <td className="px-4 py-2">
                            {item.timeSource === '内部元数据' ? (
@@ -560,9 +621,6 @@ export default function App() {
                         <td className="px-4 py-2 font-mono text-gray-500">{item.timestamp}</td>
                         <td className="px-4 py-2 font-mono text-gray-800">
                           {formatTime(item.date)}
-                          {(!item.exifTime && item.mtime && item.timestamp === item.mtime) && (
-                             <span className="ml-2 text-[10px] bg-orange-100 text-orange-600 px-1 py-0.5 rounded" title="无拍摄时间(EXIF/元数据)，当前显示为系统文件修改时间">系统时间</span>
-                          )}
                         </td>
                         <td className="px-4 py-2 text-right font-mono text-emerald-600">{item.parseDuration} ms</td>
                       </tr>
@@ -571,13 +629,19 @@ export default function App() {
                 </table>
               ) : (
                 <div className="p-4">
-                  {treeData && <TreeNode node={treeData} />}
+                  {treeData && <TreeNode node={treeData} selectedFiles={selectedFiles} onToggleSelect={handleToggleSelect} />}
                 </div>
               )}
             </div>
-            <div className="mt-2 text-right text-xs text-gray-400">
-              * 为防止浏览器内存溢出(OOM)，前端仅展示最新解析的 {Math.min(500, result.total)} 条记录。
-            </div>
+            {viewMode === 'flat' && (
+              <Pagination 
+                page={page} 
+                pageSize={pageSize} 
+                totalItems={sortedResults.length} 
+                onPageChange={setPage} 
+                onPageSizeChange={setPageSize} 
+              />
+            )}
           </div>
         )}
 
@@ -585,7 +649,7 @@ export default function App() {
           <RenamePreviewModal 
             isOpen={isRenameModalOpen}
             onClose={() => setIsRenameModalOpen(false)}
-            files={result.results}
+            files={result.results.filter(f => selectedFiles.has(f.relativePath))}
             folderPath={result.folderPath}
             onExecute={handleExecuteRenameFromModal}
           />
@@ -595,7 +659,7 @@ export default function App() {
           <SyncTimePreviewModal 
             isOpen={isSyncModalOpen}
             onClose={() => setIsSyncModalOpen(false)}
-            files={result.results}
+            files={result.results.filter(f => selectedFiles.has(f.relativePath))}
             onExecute={handleExecuteSyncFromModal}
           />
         )}

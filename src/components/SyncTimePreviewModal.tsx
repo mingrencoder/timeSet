@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { X, Play, Clock, Upload, FileText, FolderTree, List as ListIcon, ChevronDown, ChevronRight, Filter } from 'lucide-react';
+import { Pagination } from './Pagination';
+import { TableSelectMenu } from './TableSelectMenu';
 
 interface SyncTimePreviewModalProps {
   isOpen: boolean;
@@ -88,7 +90,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
   const [timeSourceFilter, setTimeSourceFilter] = useState<string>('all');
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(100);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -187,12 +189,17 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
       const hasChanged = Math.abs(targetTimestamp - file.timestamp) > 1000; // allow 1s delta
 
       const d = new Date(targetTimestamp);
-      const targetDate = isNaN(d.getTime()) ? '-' : d.toISOString().replace('T', ' ').replace('Z', '').split('.')[0];
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const targetDate = isNaN(d.getTime()) ? '-' : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+      const currentD = new Date(file.timestamp);
+      const currentDate = isNaN(currentD.getTime()) ? '-' : `${currentD.getFullYear()}-${pad(currentD.getMonth() + 1)}-${pad(currentD.getDate())} ${pad(currentD.getHours())}:${pad(currentD.getMinutes())}:${pad(currentD.getSeconds())}`;
 
       return {
         ...file,
         targetTimestamp,
         targetDate,
+        currentDate,
         source,
         hasChanged,
         rowIndex,
@@ -253,6 +260,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
       direction = 'desc';
     }
     setSortConfig({ key, direction });
+    setPage(1);
   };
 
   const getSortIcon = (key: string) => {
@@ -291,24 +299,42 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
      setSelectedPaths(newSet);
   };
 
-  const toggleAll = () => {
-     if (selectedPaths.size === filteredData.length) {
-         setSelectedPaths(new Set());
-     } else {
-         setSelectedPaths(new Set(filteredData.map(f => f.relativePath)));
-     }
+  const handleSelectPage = () => {
+    const newSet = new Set(selectedPaths);
+    const allPageChecked = paginatedData.length > 0 && paginatedData.every(f => newSet.has(f.relativePath));
+    if (allPageChecked) {
+      paginatedData.forEach(f => newSet.delete(f.relativePath));
+    } else {
+      paginatedData.forEach(f => newSet.add(f.relativePath));
+    }
+    setSelectedPaths(newSet);
+  };
+
+  const handleSelectAll = () => {
+    const newSet = new Set(selectedPaths);
+    filteredData.forEach(f => newSet.add(f.relativePath));
+    setSelectedPaths(newSet);
+  };
+
+  const handleSelectNone = () => {
+    setSelectedPaths(new Set());
   };
 
   if (!isOpen) return null;
 
   const executeSync = () => {
-    const syncPlan = Array.from(selectedPaths).map(path => {
-      const item = previewData.find(p => p.relativePath === path);
-      return {
-        relativePath: path,
-        targetTimestamp: item?.targetTimestamp
-      };
-    });
+    const itemsToSync = Array.from(selectedPaths).map(path => previewData.find(p => p.relativePath === path)).filter(Boolean);
+    const hasAnyChanges = itemsToSync.some(item => item!.hasChanged);
+    
+    if (!hasAnyChanges) {
+      alert("选中的文件无时间修改，无需恢复。");
+      return;
+    }
+
+    const syncPlan = itemsToSync.map(item => ({
+      relativePath: item!.relativePath,
+      targetTimestamp: item!.targetTimestamp
+    }));
     onExecute(syncPlan);
   };
 
@@ -379,9 +405,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                    <div className="mt-8 pt-6 border-t border-gray-200">
                      <h3 className="font-semibold text-gray-800 mb-3 text-sm">解析统计</h3>
                      <div className="space-y-2 text-xs">
-                       <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
-                         <span className="text-gray-600">文件读取条目</span>
-                         <span className="font-medium">{csvData.length}</span>
+                       <div className="flex justify-between items-center bg-white p-2 rounded border border-indigo-100 bg-indigo-50/30">
+                         <span className="text-indigo-700 font-medium">已勾选恢复数量</span>
+                         <span className="font-bold text-indigo-700">{selectedPaths.size}</span>
                        </div>
                        <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
                          <span className="text-gray-600">当前成功匹配</span>
@@ -390,6 +416,10 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                        <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
                          <span className="text-gray-600">未匹配项</span>
                          <span className="font-medium text-orange-600">{files.length - matchedCount}</span>
+                       </div>
+                       <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
+                         <span className="text-gray-400">CSV 备份文件条目数 (供参考)</span>
+                         <span className="font-medium text-gray-500">{csvData.length}</span>
                        </div>
                      </div>
                    </div>
@@ -435,7 +465,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                      <input 
                        type="checkbox" 
                        checked={onlyMatched} 
-                       onChange={(e) => setOnlyMatched(e.target.checked)} 
+                       onChange={(e) => { setOnlyMatched(e.target.checked); setPage(1); }} 
                        className="rounded text-indigo-600 focus:ring-indigo-500" 
                      />
                      <span>仅显示匹配项</span>
@@ -444,7 +474,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                      <input 
                        type="checkbox" 
                        checked={onlyDifferences} 
-                       onChange={(e) => setOnlyDifferences(e.target.checked)} 
+                       onChange={(e) => { setOnlyDifferences(e.target.checked); setPage(1); }} 
                        className="rounded text-indigo-600 focus:ring-indigo-500" 
                      />
                      <span>仅显示差异项</span>
@@ -462,26 +492,29 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-gray-50 sticky top-0 shadow-sm z-10 border-b border-gray-100">
                     <tr>
-                      <th className="px-4 py-3 w-10">
-                        <input 
-                          type="checkbox" 
-                          checked={selectedPaths.size > 0 && selectedPaths.size === filteredData.length}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            toggleAll();
-                          }}
-                          className="text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
+                      <th className="px-4 py-3 w-14">
+                        <TableSelectMenu 
+                          isPageSelected={paginatedData.length > 0 && paginatedData.every(f => selectedPaths.has(f.relativePath))}
+                          onSelectPage={handleSelectPage}
+                          onSelectAll={handleSelectAll}
+                          onSelectNone={handleSelectNone}
+                          totalItems={filteredData.length}
                         />
                       </th>
                       <th className="px-4 py-3 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => requestSort('relativePath')}>
-                        原文件 (相对路径) {getSortIcon('relativePath')}
+                        <div className="resize-x overflow-hidden flex items-center min-w-[200px]">原文件 (相对路径) {getSortIcon('relativePath')}</div>
                       </th>
                       <th className="px-4 py-3 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => requestSort('timeSource')}>
-                        时间来源 {getSortIcon('timeSource')}
+                        <div className="resize-x overflow-hidden flex items-center min-w-[100px]">时间来源 {getSortIcon('timeSource')}</div>
                       </th>
-                      <th className="px-4 py-3 font-semibold text-gray-600">匹配详情</th>
+                      <th className="px-4 py-3 font-semibold text-gray-600">
+                        <div className="resize-x overflow-hidden flex items-center min-w-[100px]">匹配详情</div>
+                      </th>
+                      <th className="px-4 py-3 font-semibold text-gray-600">
+                        <div className="resize-x overflow-hidden flex items-center min-w-[120px]">当前物理时间</div>
+                      </th>
                       <th className="px-4 py-3 font-semibold text-emerald-600 cursor-pointer select-none" onClick={() => requestSort('targetDate')}>
-                        目标恢复时间 {getSortIcon('targetDate')}
+                        <div className="resize-x overflow-hidden flex items-center min-w-[120px]">目标恢复时间 {getSortIcon('targetDate')}</div>
                       </th>
                       <th className="px-4 py-3 font-semibold text-gray-600">变化状态</th>
                     </tr>
@@ -497,7 +530,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                              className="text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
                            />
                         </td>
-                        <td className="px-4 py-3 text-gray-700 truncate max-w-[200px]" title={item.relativePath}>
+                        <td className="px-4 py-3 text-gray-700 break-all" title={item.relativePath}>
                           {item.relativePath}
                         </td>
                         <td className="px-4 py-3">
@@ -520,6 +553,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                               )}
                             </div>
                           )}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-gray-500">
+                          {item.currentDate}
                         </td>
                         <td className="px-4 py-3 font-mono">
                           {item.hasChanged ? (
@@ -548,36 +584,29 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
 
             {/* Pagination & Action */}
             <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center bg-gray-50/80 backdrop-blur">
-              {viewMode === 'flat' ? (
-                <div className="flex items-center space-x-4 text-xs text-gray-600 font-medium">
-                  <button 
-                    disabled={page === 1} 
-                    onClick={() => setPage(page - 1)}
-                    className="px-3 py-1.5 border border-gray-200 bg-white rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors shadow-sm"
-                  >
-                    上一页
-                  </button>
-                  <span>{page} / {totalPages || 1} (已选 {selectedPaths.size}/{filteredData.length} 项)</span>
-                  <button 
-                    disabled={page === totalPages || totalPages === 0} 
-                    onClick={() => setPage(page + 1)}
-                    className="px-3 py-1.5 border border-gray-200 bg-white rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors shadow-sm"
-                  >
-                    下一页
-                  </button>
-                </div>
-              ) : (
-                <div className="text-xs font-medium text-gray-600">已选 {selectedPaths.size} / {filteredData.length} 项</div>
-              )}
-
-              <button 
-                onClick={executeSync}
-                disabled={selectedPaths.size === 0 || !csvLoaded}
-                className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all flex items-center shadow-md"
-              >
-                <Play className="w-4 h-4 mr-2" />
-                执行选中的 {selectedPaths.size} 项时间恢复
-              </button>
+              <div className="flex-1 mr-4">
+                {viewMode === 'flat' ? (
+                  <Pagination 
+                    page={page} 
+                    pageSize={pageSize} 
+                    totalItems={filteredData.length} 
+                    onPageChange={setPage} 
+                    onPageSizeChange={setPageSize} 
+                  />
+                ) : (
+                  <div className="text-xs font-medium text-gray-600 mt-4 bg-gray-50 p-2 rounded border border-gray-100 flex items-center h-[52px]">已选 {selectedPaths.size} / {filteredData.length} 项</div>
+                )}
+              </div>
+              <div className="flex-shrink-0 mt-4">
+                <button 
+                  onClick={executeSync}
+                  disabled={selectedPaths.size === 0 || !csvLoaded}
+                  className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all flex items-center shadow-md"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  执行选中的 {selectedPaths.size} 项时间恢复
+                </button>
+              </div>
             </div>
           </div>
         </div>
