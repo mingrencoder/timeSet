@@ -104,7 +104,7 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  app.get('/api/pick-and-parse', async (req, res) => {
+  app.post('/api/scan-folder', async (req, res) => {
     // 设置流式响应以避免在大量文件时请求超时
     res.setHeader('Content-Type', 'application/x-ndjson');
     res.setHeader('Transfer-Encoding', 'chunked');
@@ -115,44 +115,27 @@ async function startServer() {
         res.write(JSON.stringify(data) + '\n');
     };
 
-    sendEvent({ type: 'log', message: '正在尝试唤起系统文件夹选择器...' });
-
     try {
-        const platform = os.platform();
-        let folderPath = '';
-        
-        try {
-            if (platform === 'darwin') {
-                const { stdout } = await execAsync('osascript -e \'POSIX path of (choose folder)\'');
-                folderPath = stdout.trim();
-            } else if (platform === 'win32') {
-                // Windows 环境下需要 -STA 才能正常使用 Windows Forms
-                // 使用 TopMost 的不可见窗口作为 Parent，防止对话框被遮挡在背景导致"假死"
-                const ps = "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '请选择媒体文件夹'; $form = New-Object System.Windows.Forms.Form; $form.TopMost = $true; if ($f.ShowDialog($form) -eq 'OK') { $f.SelectedPath }";
-                const { stdout } = await execAsync(`powershell -NoProfile -STA -Command "${ps}"`);
-                folderPath = stdout.trim();
-            } else {
-                const { stdout } = await execAsync('zenity --file-selection --directory');
-                folderPath = stdout.trim();
-            }
-        } catch (pickErr: any) {
-            const errMsg = pickErr.message || String(pickErr);
-            if (errMsg.includes('User canceled') || errMsg.includes('取消') || errMsg.includes('Cancel')) {
-                sendEvent({ type: 'error', error: '已取消选择文件夹。' });
-                return res.end();
-            }
-            console.error('Folder selection error:', pickErr);
-            sendEvent({ type: 'error', error: `系统对话框异常: ${errMsg}\n这可能是因为您的终端缺少图形界面权限。` });
+        const folderPath = req.body.folderPath;
+
+        if (!folderPath || typeof folderPath !== 'string') {
+            sendEvent({ type: 'error', error: '请提供有效的文件夹路径。' });
             return res.end();
         }
 
-        if (!folderPath) {
-            sendEvent({ type: 'error', error: '未选择任何文件夹或取消了选择。' });
+        if (!fs.existsSync(folderPath)) {
+            sendEvent({ type: 'error', error: `目录不存在: ${folderPath}` });
+            return res.end();
+        }
+
+        const stat = fs.statSync(folderPath);
+        if (!stat.isDirectory()) {
+            sendEvent({ type: 'error', error: `给定的路径不是一个文件夹: ${folderPath}` });
             return res.end();
         }
 
         sendEvent({ type: 'folder', path: folderPath });
-        sendEvent({ type: 'log', message: `选择完成，开始递归扫描: ${folderPath}` });
+        sendEvent({ type: 'log', message: `开始递归扫描: ${folderPath}` });
 
         let scannedCount = 0;
         let parsedCount = 0;

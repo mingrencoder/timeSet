@@ -8,16 +8,28 @@ import { Clock, AlertCircle, MonitorUp } from 'lucide-react';
 
 export default function App() {
   const [loading, setLoading] = useState(false);
+  const [inputPath, setInputPath] = useState('');
   const [result, setResult] = useState<{ folderPath: string; total: number; results: Array<{ originalName: string; relativePath: string; timestamp: number; date: string; parseDuration: number; type: string }> } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleNativePick = async () => {
+  const handleScan = async () => {
+    if (!inputPath.trim()) {
+      setError('请输入有效的绝对路径');
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setResult({ folderPath: '', total: 0, results: [] });
 
     try {
-      const response = await fetch('/api/pick-and-parse');
+      const response = await fetch('/api/scan-folder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ folderPath: inputPath.trim() }),
+      });
       if (!response.body) throw new Error('ReadableStream not supported in this browser.');
 
       const reader = response.body.getReader();
@@ -77,21 +89,27 @@ export default function App() {
       <div className="w-full max-w-4xl bg-white rounded-xl shadow-lg p-8 border border-gray-100">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">极速媒体时间解析</h1>
-          <p className="text-sm text-gray-500 mt-2">Node.js 系统原生对话框直读</p>
+          <p className="text-sm text-gray-500 mt-2">输入本地文件夹绝对路径，自动递归扫描解析</p>
         </div>
 
-        <button
-          onClick={handleNativePick}
-          disabled={loading}
-          className="w-full py-4 px-4 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center space-x-2 shadow-sm"
-        >
-          <MonitorUp className="w-5 h-5" />
-          <span>{loading ? '正在唤起系统窗口或深度扫描解析中...' : '呼出系统窗口选择文件夹'}</span>
-        </button>
-
-        <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">
-          点击按钮将通过 Node.js 原生唤起电脑的文件夹选择窗口。<br/>选中后将自动递归扫描目录下所有图片和视频。
-        </p>
+        <div className="space-y-4">
+          <input
+            type="text"
+            value={inputPath}
+            onChange={(e) => setInputPath(e.target.value)}
+            disabled={loading}
+            placeholder="请输入文件夹绝对路径 (例如: /Users/xxx/Movies 或 D:\Media)"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none disabled:opacity-50"
+          />
+          <button
+            onClick={handleScan}
+            disabled={loading || !inputPath.trim()}
+            className="w-full py-3 px-4 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center space-x-2 shadow-sm"
+          >
+            <MonitorUp className="w-5 h-5" />
+            <span>{loading ? '正在深度扫描解析中...' : '开始扫描本地文件夹'}</span>
+          </button>
+        </div>
 
         {error && (
           <div className="mt-6 p-4 bg-red-50 text-red-700 rounded-lg flex items-start space-x-3 text-sm border border-red-100">
