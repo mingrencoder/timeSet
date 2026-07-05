@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from 'react';
-import * as XLSX from 'xlsx';
 import { X, Plus, Trash2, Download, Play, FolderTree, List as ListIcon, FileText, ChevronRight, ChevronDown } from 'lucide-react';
 
 export type Rule = {
@@ -224,7 +223,7 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
     setRules(rules.map(r => r.id === id ? { ...r, ...updates } : r));
   };
 
-  const handleDownloadXLSX = () => {
+  const handleDownloadCSV = () => {
     const header = ['原始相对路径', '原始文件名', '新文件名', '规则模板'];
     const rows = previewData.map(f => [
       f.relativePath,
@@ -232,10 +231,21 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
       f.newName,
       f.newBaseName
     ]);
-    const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "RenamePreview");
-    XLSX.writeFile(workbook, `rename_preview_${Date.now()}.xlsx`);
+    const escapeCsv = (str: string | number) => `"${String(str).replace(/"/g, '""')}"`;
+    const csvContent = [
+      header.map(escapeCsv).join(','),
+      ...rows.map(row => row.map(escapeCsv).join(','))
+    ].join('\n');
+    
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `rename_preview_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const executeRename = () => {
@@ -352,8 +362,8 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
                 </button>
               </div>
               
-              <button onClick={handleDownloadXLSX} className="text-xs font-medium flex items-center text-gray-600 hover:text-gray-900 border border-gray-200 hover:bg-gray-50 bg-white px-3 py-1.5 rounded-lg shadow-sm transition-all">
-                <Download className="w-4 h-4 mr-1.5" /> 导出预览 XLSX
+              <button onClick={handleDownloadCSV} className="text-xs font-medium flex items-center text-gray-600 hover:text-gray-900 border border-gray-200 hover:bg-gray-50 bg-white px-3 py-1.5 rounded-lg shadow-sm transition-all">
+                <Download className="w-4 h-4 mr-1.5" /> 导出预览 CSV
               </button>
             </div>
 

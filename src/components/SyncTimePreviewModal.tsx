@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import * as XLSX from 'xlsx';
-import { X, Play, Clock, Upload, FileText, FolderTree, List as ListIcon, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, Play, Clock, Upload, FileText, FolderTree, List as ListIcon, ChevronDown, ChevronRight, Filter } from 'lucide-react';
 
 interface SyncTimePreviewModalProps {
   isOpen: boolean;
@@ -23,22 +22,31 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string
           className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
         />
         <FileText className="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
-        <div className="flex-1 min-w-0 grid grid-cols-2 gap-4 pr-4 items-center">
-          <span className="text-gray-600 truncate" title={node.name}>{node.name}</span>
-          <div className="flex items-center space-x-2 truncate">
+        <div className="flex-1 min-w-0 flex justify-between gap-4 pr-4 items-center">
+          <span className="text-gray-600 truncate min-w-[100px]" title={node.name}>{node.name}</span>
+          <div className="flex items-center space-x-3 truncate flex-shrink-0">
+             <span className="text-gray-500 w-24 text-right">
+               {node.original.timeSource === '内部元数据' ? (
+                 <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+               ) : (
+                 <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+               )}
+             </span>
              {node.original.source === 'current' ? (
-               <span className="bg-red-50 text-red-500 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 border border-red-100">未匹配</span>
+               <span className="bg-red-50 text-red-500 text-[10px] px-2 py-0.5 rounded flex-shrink-0 border border-red-100">未匹配</span>
              ) : (
-               <span className="bg-emerald-50 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 border border-emerald-100">已匹配</span>
+               <span className="bg-emerald-50 text-emerald-600 text-[10px] px-2 py-0.5 rounded flex-shrink-0 border border-emerald-100" title={`匹配行: ${node.original.rowIndex}\n匹配路径: ${node.original.matchedFilePath}`}>已匹配</span>
              )}
-             {node.hasChanged ? (
-                <span className="text-emerald-600 font-medium truncate">{node.targetDate}</span>
-             ) : (
-                <>
-                  <span className="text-gray-400 truncate">{node.targetDate}</span>
+             <span className={`font-mono text-[11px] w-[130px] text-right ${node.hasChanged ? 'text-emerald-600 font-medium' : 'text-gray-400'}`}>
+                {node.targetDate}
+             </span>
+             <div className="w-[50px] text-right">
+               {node.hasChanged ? (
+                  <span className="bg-indigo-50 text-indigo-600 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">需更新</span>
+               ) : (
                   <span className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">无变化</span>
-                </>
-             )}
+               )}
+             </div>
           </div>
         </div>
       </div>
@@ -69,7 +77,7 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string
 
 export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute }: SyncTimePreviewModalProps) {
   const [matchStrategy, setMatchStrategy] = useState<'relativePath' | 'filename'>('relativePath');
-  const [csvData, setCsvData] = useState<{relativePath: string, timestamp: number}[]>([]);
+  const [csvData, setCsvData] = useState<{relativePath: string, timestamp: number, rowIndex: number}[]>([]);
   const [csvLoaded, setCsvLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,6 +85,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
   const [page, setPage] = useState(1);
   const [onlyDifferences, setOnlyDifferences] = useState(false);
   const [onlyMatched, setOnlyMatched] = useState(false);
+  const [timeSourceFilter, setTimeSourceFilter] = useState<string>('all');
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const pageSize = 50;
@@ -88,59 +97,89 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const data = new Uint8Array(event.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const text = event.target?.result as string;
+        const rows = text.split('\n');
         
-        if (jsonData.length <= 1) return;
+        if (rows.length <= 1) return;
         const parsed = [];
         
-        for (let i = 1; i < jsonData.length; i++) {
-          const row = jsonData[i] as any[];
-          if (row.length >= 4) {
-            const relativePath = String(row[1] || '').trim();
-            const timestamp = parseInt(String(row[3]), 10);
+        for (let i = 1; i < rows.length; i++) {
+          const rowText = rows[i].trim();
+          if (!rowText) continue;
+          
+          // 简单正则解析 CSV 考虑双引号
+          const cols = [];
+          let current = '';
+          let inQuotes = false;
+          
+          for (let j = 0; j < rowText.length; j++) {
+            const char = rowText[j];
+            if (char === '"') {
+              if (inQuotes && rowText[j+1] === '"') {
+                current += '"';
+                j++;
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (char === ',' && !inQuotes) {
+              cols.push(current);
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          cols.push(current);
+
+          if (cols.length >= 4) {
+            const relativePath = cols[1].trim();
+            const timestamp = parseInt(cols[3], 10);
             if (relativePath && !isNaN(timestamp)) {
-               parsed.push({ relativePath, timestamp });
+               parsed.push({ relativePath, timestamp, rowIndex: i + 1 });
             }
           }
         }
         setCsvData(parsed);
         setCsvLoaded(true);
       } catch (err) {
-        console.error("解析 XLSX 失败:", err);
+        console.error("解析 CSV 失败:", err);
       }
     };
-    reader.readAsArrayBuffer(file);
+    reader.readAsText(file);
   };
 
   const previewData = useMemo(() => {
     if (!csvLoaded) return [];
 
     // Build lookup maps
-    const pathMap = new Map<string, number>();
-    const nameMap = new Map<string, number>();
+    const pathMap = new Map<string, {timestamp: number, rowIndex: number, matchedFilePath: string}>();
+    const nameMap = new Map<string, {timestamp: number, rowIndex: number, matchedFilePath: string}>();
     
     csvData.forEach(item => {
-       pathMap.set(item.relativePath, item.timestamp);
+       pathMap.set(item.relativePath, { timestamp: item.timestamp, rowIndex: item.rowIndex, matchedFilePath: item.relativePath });
        const fileName = item.relativePath.split(/[/\\]/).pop();
-       if (fileName) nameMap.set(fileName, item.timestamp);
+       if (fileName) nameMap.set(fileName, { timestamp: item.timestamp, rowIndex: item.rowIndex, matchedFilePath: item.relativePath });
     });
 
     return files.map(file => {
       let targetTimestamp = file.timestamp; // fallback to what we have
       let source = 'current';
+      let rowIndex: number | undefined;
+      let matchedFilePath: string | undefined;
 
       if (matchStrategy === 'relativePath') {
          if (pathMap.has(file.relativePath)) {
-            targetTimestamp = pathMap.get(file.relativePath)!;
+            const match = pathMap.get(file.relativePath)!;
+            targetTimestamp = match.timestamp;
+            rowIndex = match.rowIndex;
+            matchedFilePath = match.matchedFilePath;
             source = 'csv_path';
          }
       } else {
          if (nameMap.has(file.originalName)) {
-            targetTimestamp = nameMap.get(file.originalName)!;
+            const match = nameMap.get(file.originalName)!;
+            targetTimestamp = match.timestamp;
+            rowIndex = match.rowIndex;
+            matchedFilePath = match.matchedFilePath;
             source = 'csv_name';
          }
       }
@@ -155,7 +194,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
         targetTimestamp,
         targetDate,
         source,
-        hasChanged
+        hasChanged,
+        rowIndex,
+        matchedFilePath
       };
     });
   }, [files, csvData, matchStrategy, csvLoaded]);
@@ -170,6 +211,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
 
   const filteredData = useMemo(() => {
     let result = previewData;
+    if (timeSourceFilter !== 'all') {
+      result = result.filter(p => p.timeSource === timeSourceFilter);
+    }
     if (onlyDifferences) {
       result = result.filter(p => p.hasChanged);
     }
@@ -177,7 +221,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
       result = result.filter(p => p.source !== 'current');
     }
     return result;
-  }, [previewData, onlyDifferences, onlyMatched]);
+  }, [previewData, onlyDifferences, onlyMatched, timeSourceFilter]);
 
   const sortedFilteredData = useMemo(() => {
     let sortableItems = [...filteredData];
@@ -275,16 +319,16 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 sm:p-6">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[90vw] lg:max-w-[95vw] xl:max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
           <div>
             <h2 className="text-xl font-bold text-gray-900 flex items-center">
               <Clock className="w-5 h-5 mr-2 text-indigo-500" />
-              恢复物理时间 (通过备份 XLSX)
+              恢复物理时间 (通过备份 CSV)
             </h2>
-            <p className="text-sm text-gray-500 mt-1">上传之前导出的时间线 XLSX 备份文件，精确恢复本地文件的物理时间</p>
+            <p className="text-sm text-gray-500 mt-1">上传之前导出的时间线 CSV 备份文件，精确恢复本地文件的物理时间</p>
           </div>
           <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
             <X className="w-5 h-5" />
@@ -299,9 +343,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
               {!csvLoaded ? (
                  <div className="flex flex-col items-center justify-center py-12 px-4 border-2 border-dashed border-gray-300 rounded-xl bg-white hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                     <Upload className="w-8 h-8 text-indigo-400 mb-3" />
-                    <span className="text-sm font-medium text-gray-700">点击上传 XLSX 备份文件</span>
+                    <span className="text-sm font-medium text-gray-700">点击上传 CSV 备份文件</span>
                     <span className="text-xs text-gray-400 mt-1">需包含原始路径或相对路径以及时间戳列</span>
-                    <input type="file" accept=".xlsx" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+                    <input type="file" accept=".csv" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
                  </div>
               ) : (
                  <>
@@ -372,90 +416,124 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                   <FolderTree className="w-4 h-4 mr-1.5" /> 目录视图
                 </button>
               </div>
+
+              <div className="flex items-center space-x-4">
+                 <div className="flex items-center space-x-2 text-xs">
+                   <Filter className="w-3.5 h-3.5 text-gray-400" />
+                   <select 
+                     value={timeSourceFilter}
+                     onChange={(e) => { setTimeSourceFilter(e.target.value); setPage(1); }}
+                     className="border-none bg-gray-50 hover:bg-gray-100 rounded-md py-1.5 px-2 cursor-pointer focus:ring-1 focus:ring-indigo-500 text-gray-700 outline-none transition-colors border border-gray-200 font-medium"
+                   >
+                     <option value="all">全部来源</option>
+                     <option value="内部元数据">仅内部元数据</option>
+                     <option value="文件系统时间">仅文件系统时间</option>
+                   </select>
+                 </div>
+                 <div className="flex space-x-2">
+                   <label className="flex items-center space-x-1.5 text-xs text-gray-500 font-medium cursor-pointer bg-gray-50 hover:bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 transition-colors">
+                     <input 
+                       type="checkbox" 
+                       checked={onlyMatched} 
+                       onChange={(e) => setOnlyMatched(e.target.checked)} 
+                       className="rounded text-indigo-600 focus:ring-indigo-500" 
+                     />
+                     <span>仅显示匹配项</span>
+                   </label>
+                   <label className="flex items-center space-x-1.5 text-xs text-gray-500 font-medium cursor-pointer bg-gray-50 hover:bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 transition-colors">
+                     <input 
+                       type="checkbox" 
+                       checked={onlyDifferences} 
+                       onChange={(e) => setOnlyDifferences(e.target.checked)} 
+                       className="rounded text-indigo-600 focus:ring-indigo-500" 
+                     />
+                     <span>仅显示差异项</span>
+                   </label>
+                 </div>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto bg-white">
               {!csvLoaded ? (
                  <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-                   请先在左侧上传 XLSX 文件
+                   请先在左侧上传 CSV 文件
                  </div>
               ) : viewMode === 'flat' ? (
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-gray-50 sticky top-0 shadow-sm z-10 border-b border-gray-100">
                     <tr>
-                      <th className="px-6 py-3 font-semibold text-gray-600 w-1/2">
-                         <div className="flex items-center cursor-pointer select-none" onClick={() => requestSort('relativePath')}>
-                           <input 
-                             type="checkbox" 
-                             checked={selectedPaths.size > 0 && selectedPaths.size === filteredData.length}
-                             onChange={(e) => {
-                               e.stopPropagation();
-                               toggleAll();
-                             }}
-                             className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
-                           />
-                           原文件 (相对路径) {getSortIcon('relativePath')}
-                         </div>
+                      <th className="px-4 py-3 w-10">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedPaths.size > 0 && selectedPaths.size === filteredData.length}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            toggleAll();
+                          }}
+                          className="text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
+                        />
                       </th>
-                      <th className="px-6 py-3 font-semibold text-emerald-600 w-1/2">
-                         <div className="flex items-center justify-between">
-                            <span className="cursor-pointer select-none" onClick={() => requestSort('targetDate')}>
-                              目标恢复时间 (XLSX) {getSortIcon('targetDate')}
-                            </span>
-                            <div className="flex items-center space-x-2">
-                              <label className="flex items-center space-x-1.5 text-gray-500 font-normal cursor-pointer bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors">
-                                <input 
-                                  type="checkbox" 
-                                  checked={onlyMatched} 
-                                  onChange={(e) => setOnlyMatched(e.target.checked)} 
-                                  className="rounded text-indigo-600 focus:ring-indigo-500" 
-                                />
-                                <span>仅显示匹配项</span>
-                              </label>
-                              <label className="flex items-center space-x-1.5 text-gray-500 font-normal cursor-pointer bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors">
-                                <input 
-                                  type="checkbox" 
-                                  checked={onlyDifferences} 
-                                  onChange={(e) => setOnlyDifferences(e.target.checked)} 
-                                  className="rounded text-indigo-600 focus:ring-indigo-500" 
-                                />
-                                <span>仅显示差异项</span>
-                              </label>
-                            </div>
-                         </div>
+                      <th className="px-4 py-3 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => requestSort('relativePath')}>
+                        原文件 (相对路径) {getSortIcon('relativePath')}
                       </th>
+                      <th className="px-4 py-3 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => requestSort('timeSource')}>
+                        时间来源 {getSortIcon('timeSource')}
+                      </th>
+                      <th className="px-4 py-3 font-semibold text-gray-600">匹配详情</th>
+                      <th className="px-4 py-3 font-semibold text-emerald-600 cursor-pointer select-none" onClick={() => requestSort('targetDate')}>
+                        目标恢复时间 {getSortIcon('targetDate')}
+                      </th>
+                      <th className="px-4 py-3 font-semibold text-gray-600">变化状态</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {paginatedData.map((item, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-3 text-gray-500 truncate max-w-[200px]" title={item.relativePath}>
-                          <div className="flex items-center">
-                            <input 
-                               type="checkbox" 
-                               checked={selectedPaths.has(item.relativePath)}
-                               onChange={() => toggleSelection(item.relativePath)}
-                               className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
-                             />
-                             <span className="truncate">{item.relativePath}</span>
-                          </div>
+                        <td className="px-4 py-3">
+                          <input 
+                             type="checkbox" 
+                             checked={selectedPaths.has(item.relativePath)}
+                             onChange={() => toggleSelection(item.relativePath)}
+                             className="text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
+                           />
                         </td>
-                        <td className="px-6 py-3 font-mono truncate">
-                          <div className="flex items-center space-x-2">
-                             {item.source === 'current' ? (
-                               <span className="bg-red-50 text-red-500 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 border border-red-100">未匹配</span>
-                             ) : (
-                               <span className="bg-emerald-50 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 border border-emerald-100">已匹配</span>
-                             )}
-                             {item.hasChanged ? (
-                                <span className="text-emerald-600 font-medium">{item.targetDate}</span>
-                             ) : (
-                                <>
-                                  <span className="text-gray-400">{item.targetDate}</span>
-                                  <span className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">无变化</span>
-                                </>
-                             )}
-                          </div>
+                        <td className="px-4 py-3 text-gray-700 truncate max-w-[200px]" title={item.relativePath}>
+                          {item.relativePath}
+                        </td>
+                        <td className="px-4 py-3">
+                           {item.timeSource === '内部元数据' ? (
+                             <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+                           ) : (
+                             <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+                           )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {item.source === 'current' ? (
+                            <span className="bg-red-50 text-red-500 text-[10px] px-1.5 py-0.5 rounded border border-red-100">未匹配</span>
+                          ) : (
+                            <div className="flex flex-col space-y-0.5">
+                              <span className="bg-emerald-50 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded border border-emerald-100 w-fit">已匹配 (行: {item.rowIndex})</span>
+                              {item.matchedFilePath !== item.relativePath && (
+                                <span className="text-[10px] text-gray-400 truncate max-w-[200px]" title={item.matchedFilePath}>
+                                  从: {item.matchedFilePath}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono">
+                          {item.hasChanged ? (
+                            <span className="text-emerald-600 font-medium">{item.targetDate}</span>
+                          ) : (
+                            <span className="text-gray-400">{item.targetDate}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {item.hasChanged ? (
+                             <span className="bg-indigo-50 text-indigo-600 text-[10px] px-1.5 py-0.5 rounded">需更新</span>
+                          ) : (
+                             <span className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded">无变化</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -463,26 +541,6 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                 </table>
               ) : (
                 <div className="p-6">
-                  <div className="mb-4 flex justify-end space-x-2">
-                     <label className="flex items-center space-x-1.5 text-xs text-gray-500 font-medium cursor-pointer bg-gray-50 hover:bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 transition-colors">
-                       <input 
-                         type="checkbox" 
-                         checked={onlyMatched} 
-                         onChange={(e) => setOnlyMatched(e.target.checked)} 
-                         className="rounded text-indigo-600 focus:ring-indigo-500" 
-                       />
-                       <span>仅显示匹配项</span>
-                     </label>
-                     <label className="flex items-center space-x-1.5 text-xs text-gray-500 font-medium cursor-pointer bg-gray-50 hover:bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 transition-colors">
-                       <input 
-                         type="checkbox" 
-                         checked={onlyDifferences} 
-                         onChange={(e) => setOnlyDifferences(e.target.checked)} 
-                         className="rounded text-indigo-600 focus:ring-indigo-500" 
-                       />
-                       <span>仅显示差异项</span>
-                     </label>
-                  </div>
                   <TreeNode node={treeData} selectedPaths={selectedPaths} onToggle={toggleSelection} />
                 </div>
               )}

@@ -17,6 +17,9 @@ ffmpeg.setFfprobePath(ffprobeStatic.path);
 
 const upload = multer({ dest: 'uploads/' });
 
+// 全局任务状态管理 (支持暂停、停止)
+const tasks = new Map<string, { state: 'running' | 'paused' | 'stopped' }>();
+
 /**
  * 解析图片时间 (提取 EXIF DateTimeOriginal)
  */
@@ -78,10 +81,7 @@ function parseVideoTime(filePath: string): Promise<number | null> {
 
 async function startServer() {
   const app = express();
-  // AI Studio 沙箱环境带有 DISABLE_HMR=true，强制使用 3000 端口以保证预览正常
-  // 下载到本地后默认使用 3002 端口，也可以通过 PORT 环境变量指定
-  const isAIStudio = process.env.DISABLE_HMR === 'true';
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : (isAIStudio ? 3000 : 3002);
+  const PORT = 3000;
 
   // Make sure uploads directory exists
   if (!fs.existsSync('uploads')) {
@@ -90,6 +90,23 @@ async function startServer() {
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+
+  // 任务控制接口
+  app.post('/api/task/:id/pause', (req, res) => {
+      const task = tasks.get(req.params.id);
+      if (task) task.state = 'paused';
+      res.json({ success: true });
+  });
+  app.post('/api/task/:id/resume', (req, res) => {
+      const task = tasks.get(req.params.id);
+      if (task) task.state = 'running';
+      res.json({ success: true });
+  });
+  app.post('/api/task/:id/stop', (req, res) => {
+      const task = tasks.get(req.params.id);
+      if (task) task.state = 'stopped';
+      res.json({ success: true });
+  });
 
   app.post('/api/scan-folder', async (req, res) => {
     // 设置流式响应以避免在大量文件时请求超时
@@ -103,11 +120,15 @@ async function startServer() {
     };
 
     try {
-        const folderPath = req.body.folderPath;
+        const { folderPath, taskId } = req.body;
 
         if (!folderPath || typeof folderPath !== 'string') {
             sendEvent({ type: 'error', error: '请提供有效的文件夹路径。' });
             return res.end();
+        }
+
+        if (taskId) {
+            tasks.set(taskId, { state: 'running' });
         }
 
         if (!fs.existsSync(folderPath)) {
@@ -126,8 +147,10 @@ async function startServer() {
 
         let scannedCount = 0;
         let parsedCount = 0;
+        let isStopped = false;
 
         async function scanDirectoryStream(dir: string, baseDir: string) {
+            if (isStopped) return;
             let entries;
             try {
                 entries = await fsPromises.readdir(dir, { withFileTypes: true });
@@ -137,6 +160,16 @@ async function startServer() {
             }
             
             for (const entry of entries) {
+                if (taskId) {
+                    while (tasks.get(taskId)?.state === 'paused') {
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                    if (tasks.get(taskId)?.state === 'stopped') {
+                        isStopped = true;
+                        return;
+                    }
+                }
+
                 const fullPath = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     await scanDirectoryStream(fullPath, baseDir);
@@ -168,6 +201,7 @@ async function startServer() {
                             }
                             
                             const timestamp = parsedTime || mtime; // 兼容原逻辑
+                            const timeSource = parsedTime ? '内部元数据' : '文件系统时间';
                             const parseDuration = Date.now() - startTime;
                             
                             parsedCount++;
@@ -179,6 +213,7 @@ async function startServer() {
                                     timestamp,       // default best-effort time
                                     exifTime: parsedTime, // nullable
                                     mtime,           // original mtime
+                                    timeSource,
                                     date: new Date(timestamp).toISOString(),
                                     parseDuration,
                                     type: isVideo ? 'video' : 'image'
@@ -205,7 +240,14 @@ async function startServer() {
         }
 
         await scanDirectoryStream(folderPath, folderPath);
-        sendEvent({ type: 'done', total: parsedCount, scanned: scannedCount });
+        
+        if (taskId && tasks.get(taskId)?.state === 'stopped') {
+            sendEvent({ type: 'done', total: parsedCount, scanned: scannedCount, message: '扫描已终止' });
+        } else {
+            sendEvent({ type: 'done', total: parsedCount, scanned: scannedCount });
+        }
+        
+        if (taskId) tasks.delete(taskId);
         res.end();
 
     } catch (err: any) {
@@ -226,18 +268,33 @@ async function startServer() {
     };
 
     try {
-      const { folderPath, syncPlan } = req.body;
+      const { folderPath, syncPlan, taskId } = req.body;
       if (!folderPath || !Array.isArray(syncPlan)) {
         sendEvent({ type: 'error', error: '无效的请求参数' });
         return res.end();
+      }
+
+      if (taskId) {
+          tasks.set(taskId, { state: 'running' });
       }
 
       let successCount = 0;
       let errorCount = 0;
       const errors = [];
       const total = syncPlan.length;
+      let isStopped = false;
 
       for (let i = 0; i < total; i++) {
+        if (taskId) {
+            while (tasks.get(taskId)?.state === 'paused') {
+                await new Promise(r => setTimeout(r, 500));
+            }
+            if (tasks.get(taskId)?.state === 'stopped') {
+                isStopped = true;
+                break;
+            }
+        }
+
         const item = syncPlan[i];
         try {
           const fullPath = path.join(folderPath, item.relativePath);
@@ -255,7 +312,8 @@ async function startServer() {
         }
       }
 
-      sendEvent({ type: 'done', successCount, errorCount, errors });
+      sendEvent({ type: 'done', successCount, errorCount, errors, stopped: isStopped });
+      if (taskId) tasks.delete(taskId);
       res.end();
     } catch (err: any) {
       sendEvent({ type: 'error', error: err.message });
@@ -275,18 +333,33 @@ async function startServer() {
     };
 
     try {
-      const { folderPath, renamePlan } = req.body;
+      const { folderPath, renamePlan, taskId } = req.body;
       if (!folderPath || !Array.isArray(renamePlan)) {
         sendEvent({ type: 'error', error: '无效的请求参数' });
         return res.end();
+      }
+
+      if (taskId) {
+          tasks.set(taskId, { state: 'running' });
       }
 
       let successCount = 0;
       let errorCount = 0;
       const errors = [];
       const total = renamePlan.length;
+      let isStopped = false;
 
       for (let i = 0; i < total; i++) {
+        if (taskId) {
+            while (tasks.get(taskId)?.state === 'paused') {
+                await new Promise(r => setTimeout(r, 500));
+            }
+            if (tasks.get(taskId)?.state === 'stopped') {
+                isStopped = true;
+                break;
+            }
+        }
+
         const item = renamePlan[i];
         try {
           const oldFullPath = path.join(folderPath, item.relativePath);
@@ -321,7 +394,8 @@ async function startServer() {
         }
       }
 
-      sendEvent({ type: 'done', successCount, errorCount, errors });
+      sendEvent({ type: 'done', successCount, errorCount, errors, stopped: isStopped });
+      if (taskId) tasks.delete(taskId);
       res.end();
     } catch (err: any) {
       sendEvent({ type: 'error', error: err.message });
@@ -374,6 +448,7 @@ async function startServer() {
          }
       }
       const parseDuration = Date.now() - startTime;
+      const timeSource = timestamp ? '内部元数据' : '文件系统时间';
       
       if (isUploaded) {
           fs.unlink(filePath, (err) => {
@@ -381,7 +456,7 @@ async function startServer() {
           });
       }
       
-      res.json({ timestamp, date: new Date(timestamp).toISOString(), originalName, parseDuration });
+      res.json({ timestamp, date: new Date(timestamp).toISOString(), originalName, parseDuration, timeSource });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

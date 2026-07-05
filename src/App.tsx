@@ -4,8 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import * as XLSX from 'xlsx';
-import { Clock, AlertCircle, MonitorUp, Download, RefreshCcw, FileEdit, CheckCircle, FolderTree, List as ListIcon, ChevronDown, ChevronRight, FileText } from 'lucide-react';
+import { Clock, AlertCircle, MonitorUp, Download, RefreshCcw, FileEdit, CheckCircle, FolderTree, List as ListIcon, ChevronDown, ChevronRight, FileText, Filter, Pause, Play, Square } from 'lucide-react';
 import RenamePreviewModal from './components/RenamePreviewModal';
 import SyncTimePreviewModal from './components/SyncTimePreviewModal';
 
@@ -25,6 +24,13 @@ const TreeNode: React.FC<{ node: any, level?: number }> = ({ node, level = 0 }) 
         </div>
         <div className="flex items-center flex-shrink-0 pr-4 space-x-6">
            <span className="text-gray-500 w-16 text-right">{node.original.type === 'video' ? '视频' : '图片'}</span>
+           <span className="text-gray-500 w-24 text-right">
+             {node.original.timeSource === '内部元数据' ? (
+               <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+             ) : (
+               <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+             )}
+           </span>
            <span className="text-gray-800 font-mono w-40 text-right flex items-center justify-end">
              {formatTime(node.original.date)}
              {(!node.original.exifTime && node.original.mtime && node.original.timestamp === node.original.mtime) && (
@@ -65,10 +71,16 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'flat' | 'tree'>('flat');
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const [timeSourceFilter, setTimeSourceFilter] = useState<string>('all');
   
   const sortedResults = useMemo(() => {
     if (!result?.results) return [];
     let sortableItems = [...result.results];
+    
+    if (timeSourceFilter !== 'all') {
+      sortableItems = sortableItems.filter(item => item.timeSource === timeSourceFilter);
+    }
+    
     if (sortConfig !== null) {
       sortableItems.sort((a, b) => {
         let aValue = a[sortConfig.key];
@@ -89,7 +101,7 @@ export default function App() {
       });
     }
     return sortableItems;
-  }, [result, sortConfig]);
+  }, [result, sortConfig, timeSourceFilter]);
 
   const requestSort = (key: string) => {
     let direction: 'asc' | 'desc' = 'asc';
@@ -110,23 +122,54 @@ export default function App() {
   const [processResult, setProcessResult] = useState<{type: string, data: any} | null>(null);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [taskState, setTaskState] = useState<'running' | 'paused' | 'stopped'>('stopped');
 
-  // 1. 纯前端导出 XLSX
-  const handleExportXLSX = () => {
+  const generateTaskId = () => Math.random().toString(36).substring(2, 15);
+
+  const handleTaskAction = async (action: 'pause' | 'resume' | 'stop') => {
+    if (!taskId) return;
+    try {
+      await fetch(`/api/task/${taskId}/${action}`, { method: 'POST' });
+      setTaskState(action === 'stop' ? 'stopped' : action === 'pause' ? 'paused' : 'running');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 1. 纯前端导出 CSV
+  const handleExportCSV = () => {
     if (!result || result.results.length === 0) return;
-    const header = ['原始路径', '相对路径', '媒体类型', '13位时间戳', '格式化时间'];
+    const header = ['原始路径', '相对路径', '媒体类型', '13位时间戳', '格式化时间', '时间来源'];
     
-    const rows = result.results.map(f => [
+    const dataToExport = timeSourceFilter === 'all' 
+      ? result.results 
+      : result.results.filter(f => f.timeSource === timeSourceFilter);
+      
+    const rows = dataToExport.map(f => [
         `${result.folderPath}/${f.relativePath}`, 
         f.relativePath, 
         f.type === 'video' ? '视频' : '图片',
         f.timestamp, 
-        formatTime(f.date)
+        formatTime(f.date),
+        f.timeSource || '未知'
     ]);
-    const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Timeline");
-    XLSX.writeFile(workbook, `timeline_export_${Date.now()}.xlsx`);
+
+    const escapeCsv = (str: string | number) => `"${String(str).replace(/"/g, '""')}"`;
+    const csvContent = [
+      header.map(escapeCsv).join(','),
+      ...rows.map(row => row.map(escapeCsv).join(','))
+    ].join('\n');
+    
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `timeline_export_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleOpenSyncModal = () => {
@@ -139,11 +182,16 @@ export default function App() {
     setProcessResult(null);
     setProgress({ type, current: 0, total: body.renamePlan ? body.renamePlan.length : body.syncPlan.length });
     setError(null);
+    
+    const newTaskId = generateTaskId();
+    setTaskId(newTaskId);
+    setTaskState('running');
+    
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, taskId: newTaskId }),
       });
       if (!response.body) throw new Error('ReadableStream not supported');
       const reader = response.body.getReader();
@@ -179,6 +227,8 @@ export default function App() {
     } finally {
       setProcessing(false);
       setProgress(null);
+      setTaskId(null);
+      setTaskState('stopped');
     }
   };
 
@@ -207,11 +257,15 @@ export default function App() {
     setError(null);
     setResult({ folderPath: '', total: 0, results: [] });
 
+    const newTaskId = generateTaskId();
+    setTaskId(newTaskId);
+    setTaskState('running');
+
     try {
       const response = await fetch('/api/scan-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderPath: inputPath.trim() }),
+        body: JSON.stringify({ folderPath: inputPath.trim(), taskId: newTaskId }),
       });
       if (!response.body) throw new Error('ReadableStream not supported');
 
@@ -254,13 +308,19 @@ export default function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setTaskId(null);
+      setTaskState('stopped');
     }
   };
 
   const treeData = useMemo(() => {
     if (!result || !result.results) return null;
     const root = { name: result.folderPath.split(/[/\\]/).pop() || 'root', isFile: false, children: {} as any };
-    result.results.forEach(item => {
+    const filteredResults = timeSourceFilter === 'all' 
+      ? result.results 
+      : result.results.filter(item => item.timeSource === timeSourceFilter);
+      
+    filteredResults.forEach(item => {
       const parts = item.relativePath.split(/[/\\]/);
       let current = root;
       for (let i = 0; i < parts.length - 1; i++) {
@@ -278,7 +338,7 @@ export default function App() {
       };
     });
     return root;
-  }, [result]);
+  }, [result, timeSourceFilter]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
@@ -314,6 +374,42 @@ export default function App() {
           </div>
         )}
 
+        {/* Task Controls for Scan, Sync, Rename */}
+        {(loading || processing) && taskId && (
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between bg-indigo-50 p-4 rounded-lg border border-indigo-100 shadow-inner">
+            <div className="flex items-center space-x-2 mb-2 sm:mb-0">
+               <span className="relative flex h-3 w-3">
+                 {taskState === 'running' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>}
+                 <span className={`relative inline-flex rounded-full h-3 w-3 ${taskState === 'running' ? 'bg-indigo-500' : taskState === 'paused' ? 'bg-yellow-500' : 'bg-gray-400'}`}></span>
+               </span>
+               <span className="text-sm font-medium text-indigo-900">
+                  任务状态: {taskState === 'running' ? '运行中' : taskState === 'paused' ? '已暂停' : '已停止'}
+               </span>
+            </div>
+            
+            <div className="flex space-x-2">
+              {taskState === 'running' && (
+                <button onClick={() => handleTaskAction('pause')} className="px-3 py-1.5 bg-white border border-indigo-200 text-indigo-700 rounded text-xs font-medium hover:bg-indigo-50 transition-colors flex items-center space-x-1 shadow-sm">
+                  <Pause className="w-3.5 h-3.5" />
+                  <span>暂停</span>
+                </button>
+              )}
+              {taskState === 'paused' && (
+                <button onClick={() => handleTaskAction('resume')} className="px-3 py-1.5 bg-indigo-600 border border-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors flex items-center space-x-1 shadow-sm">
+                  <Play className="w-3.5 h-3.5" />
+                  <span>继续</span>
+                </button>
+              )}
+              {taskState !== 'stopped' && (
+                <button onClick={() => handleTaskAction('stop')} className="px-3 py-1.5 bg-white border border-red-200 text-red-600 rounded text-xs font-medium hover:bg-red-50 transition-colors flex items-center space-x-1 shadow-sm">
+                  <Square className="w-3.5 h-3.5" />
+                  <span>停止</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {result && result.folderPath && (
           <div className="mt-6 p-5 bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
             <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center">
@@ -331,12 +427,12 @@ export default function App() {
               <div className="mb-4 pt-4 border-t border-gray-200">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <button
-                    onClick={handleExportXLSX}
+                    onClick={handleExportCSV}
                     disabled={processing}
                     className="flex-1 py-2 px-3 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
                   >
                     <Download className="w-4 h-4" />
-                    <span>1. 导出时间线备份 (XLSX)</span>
+                    <span>1. 导出时间线备份 (CSV)</span>
                   </button>
                   <button
                     onClick={handleOpenSyncModal}
@@ -378,6 +474,7 @@ export default function App() {
                     <div>
                       <p className="font-semibold text-green-900">
                         {processResult.type === 'sync' ? '时间同步完成' : '重命名完成'}
+                        {processResult.data.stopped ? ' (已终止)' : ''}
                       </p>
                       <p className="mt-1">成功: {processResult.data.successCount} 个文件</p>
                       {processResult.data.errorCount > 0 && (
@@ -389,19 +486,35 @@ export default function App() {
               </div>
             )}
 
-            <div className="mb-3 flex justify-between items-center bg-gray-100 p-1.5 rounded-lg w-max">
-                <button 
-                  onClick={() => setViewMode('flat')} 
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'flat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                  <ListIcon className="w-4 h-4 mr-1.5" /> 列表视图
-                </button>
-                <button 
-                  onClick={() => setViewMode('tree')} 
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'tree' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                  <FolderTree className="w-4 h-4 mr-1.5" /> 目录视图
-                </button>
+            <div className="mb-3 flex justify-between items-center bg-gray-100 p-1.5 rounded-lg w-full flex-wrap gap-2">
+                <div className="flex space-x-1">
+                  <button 
+                    onClick={() => setViewMode('flat')} 
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'flat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    <ListIcon className="w-4 h-4 mr-1.5" /> 列表视图
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('tree')} 
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'tree' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    <FolderTree className="w-4 h-4 mr-1.5" /> 目录视图
+                  </button>
+                </div>
+                
+                <div className="flex items-center space-x-2 text-xs">
+                  <Filter className="w-3.5 h-3.5 text-gray-400" />
+                  <span className="text-gray-600 font-medium">时间来源:</span>
+                  <select 
+                    value={timeSourceFilter}
+                    onChange={(e) => setTimeSourceFilter(e.target.value)}
+                    className="border-none bg-white rounded-md py-1 px-2 shadow-sm focus:ring-1 focus:ring-indigo-500 text-gray-700 outline-none"
+                  >
+                    <option value="all">全部来源</option>
+                    <option value="内部元数据">仅内部元数据</option>
+                    <option value="文件系统时间">仅文件系统时间</option>
+                  </select>
+                </div>
             </div>
 
             <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded bg-white relative shadow-inner">
@@ -414,6 +527,9 @@ export default function App() {
                       </th>
                       <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('type')}>
                         类型 {getSortIcon('type')}
+                      </th>
+                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('timeSource')}>
+                        时间来源 {getSortIcon('timeSource')}
                       </th>
                       <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('timestamp')}>
                         解析时间戳 {getSortIcon('timestamp')}
@@ -428,12 +544,19 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {sortedResults.length === 0 && (
-                      <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或文件不存在</td></tr>
+                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或符合条件的文件</td></tr>
                     )}
                     {sortedResults.map((item, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 py-2 font-mono text-gray-800 max-w-[200px] truncate" title={item.relativePath}>{item.relativePath}</td>
                         <td className="px-4 py-2 text-gray-500">{item.type === 'video' ? '视频' : '图片'}</td>
+                        <td className="px-4 py-2">
+                           {item.timeSource === '内部元数据' ? (
+                             <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+                           ) : (
+                             <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+                           )}
+                        </td>
                         <td className="px-4 py-2 font-mono text-gray-500">{item.timestamp}</td>
                         <td className="px-4 py-2 font-mono text-gray-800">
                           {formatTime(item.date)}
