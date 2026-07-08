@@ -22,27 +22,27 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedFiles?: Set<string
   if (node.isFile) {
     const isSelected = selectedFiles?.has(node.original.relativePath);
     return (
-      <div className="flex items-center justify-between text-xs py-2 hover:bg-gray-50 border-b border-gray-50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
+      <div className="flex items-center justify-between text-xs py-2 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
         <div className="flex items-center min-w-0 pr-4">
           <input 
             type="checkbox" 
             checked={isSelected}
             onChange={() => onToggleSelect && onToggleSelect(node.original.relativePath)}
-            className="mr-2 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+            className="mr-3 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500/50 focus:ring-offset-slate-900 cursor-pointer"
           />
-          <FileText className="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
-          <span className="text-gray-700 truncate font-medium" title={node.name}>{node.name}</span>
+          <FileText className="w-4 h-4 text-slate-500 mr-2 flex-shrink-0" />
+          <span className="text-slate-300 truncate font-mono" title={node.name}>{node.name}</span>
         </div>
         <div className="flex items-center flex-shrink-0 pr-4 space-x-6">
-           <span className="text-gray-500 w-16 text-right">{node.original.type === 'video' ? '视频' : '图片'}</span>
-           <span className="text-gray-500 w-24 text-right">
+           <span className="text-slate-500 w-16 text-right font-mono">{node.original.type === 'video' ? '视频' : '图片'}</span>
+           <span className="w-24 text-right flex justify-end">
              {node.original.timeSource === '内部元数据' ? (
-               <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+               <span className="text-emerald-400 bg-emerald-950/50 border border-emerald-900/50 px-1.5 py-0.5 rounded text-[10px] font-mono">内部元数据</span>
              ) : (
-               <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+               <span className="text-amber-400 bg-amber-950/50 border border-amber-900/50 px-1.5 py-0.5 rounded text-[10px] font-mono shadow-[0_0_5px_rgba(251,191,36,0.15)]">文件系统时间</span>
              )}
            </span>
-           <span className="text-gray-800 font-mono w-40 text-right flex items-center justify-end">
+           <span className="text-slate-300 font-mono w-40 text-right flex items-center justify-end">
              {formatTime(node.original.date)}
            </span>
         </div>
@@ -53,13 +53,13 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedFiles?: Set<string
   return (
     <div>
       <div 
-        className="flex items-center text-xs py-2 hover:bg-gray-100 cursor-pointer font-medium text-gray-700 transition-colors rounded-md" 
+        className="flex items-center text-xs py-2 hover:bg-slate-800/50 cursor-pointer font-medium text-slate-300 transition-colors rounded-md" 
         style={{ paddingLeft: `${level * 20}px` }}
         onClick={() => setIsOpen(!isOpen)}
       >
-        {isOpen ? <ChevronDown className="w-4 h-4 text-gray-500 mr-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 mr-1 flex-shrink-0" />}
-        <FolderTree className="w-4 h-4 text-indigo-500 mr-2 flex-shrink-0" />
-        {node.name}
+        {isOpen ? <ChevronDown className="w-4 h-4 text-slate-500 mr-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-500 mr-1 flex-shrink-0" />}
+        <FolderTree className="w-4 h-4 text-indigo-400 mr-2 flex-shrink-0" />
+        <span className="font-mono">{node.name}</span>
       </div>
       {isOpen && (
         <div className="mt-1">
@@ -179,10 +179,12 @@ export default function App() {
     document.body.removeChild(form);
   };
 
+  const [showSelectWarning, setShowSelectWarning] = useState(false);
+
   const handleOpenSyncModal = () => {
     if (!result || result.results.length === 0) return;
     if (selectedFiles.size === 0) {
-      alert("请先勾选需要恢复数据的文件。");
+      setShowSelectWarning(true);
       return;
     }
     setIsSyncModalOpen(true);
@@ -246,23 +248,29 @@ export default function App() {
     }
   };
 
+  const [lastExecutedPlan, setLastExecutedPlan] = useState<any[] | null>(null);
+
   const handleExecuteSyncFromModal = (syncPlan: any[]) => {
-    setIsSyncModalOpen(false);
+    setLastExecutedPlan(syncPlan);
     executeStreamOp('/api/sync-time', { folderPath: result?.folderPath, syncPlan, total: syncPlan.length || result?.total }, 'sync');
   };
 
   const handleOpenRenameModal = () => {
     if (!result || result.results.length === 0) return;
+    if (selectedFiles.size === 0) {
+      setShowSelectWarning(true);
+      return;
+    }
     setIsRenameModalOpen(true);
   };
 
   const handleExecuteRenameFromModal = (renamePlan: any[]) => {
-    setIsRenameModalOpen(false);
+    setLastExecutedPlan(renamePlan);
     executeStreamOp('/api/rename-files', { folderPath: result?.folderPath, renamePlan, total: renamePlan.length || result?.total }, 'rename');
   };
 
   const handleExecuteInjectFromModal = (injectPlan: any[]) => {
-    setIsSyncModalOpen(false);
+    setLastExecutedPlan(injectPlan);
     executeStreamOp('/api/inject-metadata', { 
       folderPath: result?.folderPath, 
       injectPlan: injectPlan,
@@ -270,6 +278,31 @@ export default function App() {
     }, 'inject');
   };
 
+
+  const handleClearResult = () => {
+    if (processResult && lastExecutedPlan && result) {
+      const errors = processResult.data?.errors || [];
+      const errorPaths = new Set(errors.map((e: any) => e.path));
+      
+      const newResults = result.results.map(file => {
+        const planItem = lastExecutedPlan.find(p => p.relativePath === file.relativePath);
+        if (planItem && !errorPaths.has(file.relativePath)) {
+           const d = new Date(planItem.targetTimestamp || planItem.targetTime); // depending on plan type
+           const pad = (n: number) => n.toString().padStart(2, '0');
+           const dateStr = isNaN(d.getTime()) ? '-' : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+           return {
+             ...file,
+             timestamp: planItem.targetTimestamp || file.timestamp,
+             date: dateStr
+           };
+        }
+        return file;
+      });
+      setResult({ ...result, results: newResults });
+    }
+    setProcessResult(null);
+    setLastExecutedPlan(null);
+  };
 
   const handleScan = async () => {
     if (!inputPath.trim()) {
@@ -393,70 +426,102 @@ export default function App() {
     return root;
   }, [result, timeSourceFilter]);
 
+  const modalFiles = useMemo(() => {
+    if (!result) return [];
+    return result.results.filter(f => selectedFiles.has(f.relativePath));
+  }, [result, selectedFiles]);
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-4xl bg-white rounded-xl shadow-lg p-8 border border-gray-100">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">极速媒体时间解析</h1>
-          <p className="text-sm text-gray-500 mt-2">输入本地文件夹绝对路径，自动递归扫描解析</p>
+    <div className="min-h-screen bg-slate-950 text-slate-300 flex flex-col p-4 sm:p-8 font-sans">
+      <div className="w-full max-w-6xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-4">
+          <div className="flex items-baseline space-x-3 mb-4 sm:mb-0">
+            <h1 className="text-2xl font-mono font-bold text-slate-100 tracking-tight">TimeSet 媒体时间管理 <span className="text-cyan-500 animate-pulse">//</span></h1>
+          </div>
+          <div className="flex items-center space-x-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded text-xs font-mono">
+            {(loading || processing) ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></span>
+                <span className="text-cyan-400 tracking-widest">正在扫描...</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-slate-600"></span>
+                <span className="text-slate-500 tracking-widest">系统空闲</span>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="space-y-4">
-          <input
-            type="text"
-            value={inputPath}
-            onChange={(e) => setInputPath(e.target.value)}
-            disabled={loading}
-            placeholder="请输入文件夹绝对路径 (例如: /Users/xxx/Movies 或 D:\Media)"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none disabled:opacity-50"
-          />
-          <button
-            onClick={handleScan}
-            disabled={loading || !inputPath.trim()}
-            className="w-full py-3 px-4 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center space-x-2 shadow-sm"
-          >
-            <MonitorUp className="w-5 h-5" />
-            <span>{loading ? '正在深度扫描解析中...' : '开始扫描本地文件夹'}</span>
-          </button>
+          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-1 focus-within:border-cyan-800 focus-within:ring-1 focus-within:ring-cyan-800 transition-all">
+            <span className="text-cyan-500 font-mono pl-4 pr-2 font-bold">{'>'}</span>
+            <input
+              type="text"
+              value={inputPath}
+              onChange={(e) => setInputPath(e.target.value)}
+              disabled={loading}
+              placeholder="请输入文件夹绝对路径 (例如: /Users/xxx/Movies 或 D:\Media)"
+              className="flex-1 bg-transparent border-none text-slate-200 font-mono py-3 outline-none placeholder-slate-700 disabled:opacity-50 w-full"
+            />
+          </div>
+          
+          {loading ? (
+             <button onClick={() => handleTaskAction('stop')} className="w-full py-3 bg-red-950/40 text-red-400 border border-red-900/50 rounded-lg font-mono tracking-widest hover:bg-red-900/50 transition-all flex justify-center items-center">
+               <Square className="w-4 h-4 mr-2" />
+               停止任务
+             </button>
+          ) : (
+             <button
+               onClick={handleScan}
+               disabled={!inputPath.trim()}
+               className="w-full py-3 bg-cyan-400 text-slate-950 border border-cyan-400 rounded-lg font-mono tracking-widest hover:bg-cyan-300 hover:shadow-[0_0_15px_rgba(6,182,212,0.6)] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-30 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-slate-700 disabled:cursor-not-allowed transition-all flex justify-center items-center font-bold"
+             >
+               <MonitorUp className="w-4 h-4 mr-2" />
+               开始扫描本地文件夹
+             </button>
+          )}
         </div>
 
         {error && (
-          <div className="mt-6 p-4 bg-red-50 text-red-700 rounded-lg flex items-start space-x-3 text-sm border border-red-100">
-            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div className="p-4 bg-red-950/30 text-red-400 rounded-lg flex items-start space-x-3 text-sm border border-red-900/50 font-mono">
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-500" />
             <span className="leading-relaxed">{error}</span>
           </div>
         )}
 
-        {/* Task Controls for Scan, Sync, Rename */}
+        {/* Task Controls */}
         {(loading || processing) && taskId && (
-          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between bg-indigo-50 p-4 rounded-lg border border-indigo-100 shadow-inner">
-            <div className="flex items-center space-x-2 mb-2 sm:mb-0">
+          <div className="flex flex-col sm:flex-row items-center justify-between bg-indigo-950/30 p-4 rounded-lg border border-indigo-900/50">
+            <div className="flex items-center space-x-3 mb-4 sm:mb-0">
                <span className="relative flex h-3 w-3">
-                 {taskState === 'running' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>}
-                 <span className={`relative inline-flex rounded-full h-3 w-3 ${taskState === 'running' ? 'bg-indigo-500' : taskState === 'paused' ? 'bg-yellow-500' : 'bg-gray-400'}`}></span>
+                 {taskState === 'running' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>}
+                 <span className={`relative inline-flex rounded-full h-3 w-3 ${taskState === 'running' ? 'bg-cyan-500' : taskState === 'paused' ? 'bg-amber-500' : 'bg-slate-600'}`}></span>
                </span>
-               <span className="text-sm font-medium text-indigo-900">
+               <span className="text-sm font-mono text-indigo-300 tracking-wider">
                   任务状态: {taskState === 'running' ? '运行中' : taskState === 'paused' ? '已暂停' : '已停止'}
                </span>
             </div>
             
-            <div className="flex space-x-2">
+            <div className="flex space-x-3">
               {taskState === 'running' && (
-                <button onClick={() => handleTaskAction('pause')} className="px-3 py-1.5 bg-white border border-indigo-200 text-indigo-700 rounded text-xs font-medium hover:bg-indigo-50 transition-colors flex items-center space-x-1 shadow-sm">
-                  <Pause className="w-3.5 h-3.5" />
-                  <span>暂停</span>
+                <button onClick={() => handleTaskAction('pause')} className="px-4 py-1.5 bg-slate-900 border border-slate-700 text-slate-300 hover:text-white rounded text-xs font-mono hover:bg-slate-800 transition-colors flex items-center">
+                  <Pause className="w-3.5 h-3.5 mr-1.5" />
+                  暂停
                 </button>
               )}
               {taskState === 'paused' && (
-                <button onClick={() => handleTaskAction('resume')} className="px-3 py-1.5 bg-indigo-600 border border-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors flex items-center space-x-1 shadow-sm">
-                  <Play className="w-3.5 h-3.5" />
-                  <span>继续</span>
+                <button onClick={() => handleTaskAction('resume')} className="px-4 py-1.5 bg-cyan-950 border border-cyan-800 text-cyan-400 rounded text-xs font-mono hover:bg-cyan-900 transition-colors flex items-center">
+                  <Play className="w-3.5 h-3.5 mr-1.5" />
+                  继续
                 </button>
               )}
               {taskState !== 'stopped' && (
-                <button onClick={() => handleTaskAction('stop')} className="px-3 py-1.5 bg-white border border-red-200 text-red-600 rounded text-xs font-medium hover:bg-red-50 transition-colors flex items-center space-x-1 shadow-sm">
-                  <Square className="w-3.5 h-3.5" />
-                  <span>停止/取消当前任务</span>
+                <button onClick={() => handleTaskAction('stop')} className="px-4 py-1.5 bg-slate-900 border border-red-900/50 text-red-400 rounded text-xs font-mono hover:bg-red-950/50 transition-colors flex items-center hover:border-red-500">
+                  <Square className="w-3.5 h-3.5 mr-1.5" />
+                  停止/取消当前任务
                 </button>
               )}
             </div>
@@ -464,104 +529,99 @@ export default function App() {
         )}
 
         {result && result.folderPath && (
-          <div className="mt-6 p-5 bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center">
-              <Clock className="w-4 h-4 mr-2" />
-              解析中 / 完成 (已处理 {result.total} 个文件)
-            </h3>
+          <div className="p-1 pb-8 space-y-6">
             
-            <div className="mb-4 flex flex-col space-y-1">
-              <span className="text-gray-500 text-xs">扫描根目录:</span>
-              <span className="text-gray-900 font-mono text-xs break-all">{result.folderPath}</span>
+            <div className="flex flex-col space-y-1">
+              <span className="text-slate-500 text-xs font-mono uppercase tracking-wider text-opacity-80">扫描根目录 (已处理 {result.total} 个文件):</span>
+              <span className="text-slate-200 font-mono text-sm break-all">{result.folderPath}</span>
             </div>
             
-            {/* 核心操作按钮组 */}
+            {/* Action Dashboard - 3 Column Grid */}
             {result.results.length > 0 && (!loading || taskState === 'paused') && (
-              <div className="mb-4 pt-4 border-t border-gray-200">
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <button
-                    onClick={handleExportCSV}
-                    disabled={processing || (loading && taskState !== 'paused')}
-                    className="flex-1 py-2 px-3 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>1. 导出 CSV {selectedFiles.size > 0 ? `(${selectedFiles.size} 项)` : '(全部)'}</span>
-                  </button>
-                  <button
-                    onClick={handleOpenSyncModal}
-                    disabled={processing || (loading && taskState !== 'paused')}
-                    className="flex-1 py-2 px-3 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
-                  >
-                    <RefreshCcw className="w-4 h-4" />
-                    <span>2. 恢复物理时间预览...</span>
-                  </button>
-                  <button
-                    onClick={handleOpenRenameModal}
-                    disabled={processing || (loading && taskState !== 'paused')}
-                    className="flex-1 py-2 px-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 disabled:opacity-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
-                  >
-                    <FileEdit className="w-4 h-4" />
-                    <span>3. 规则重命名预览...</span>
-                  </button>
-                </div>
-
-                {/* 进度条 */}
-                {progress && (
-                  <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-sm font-medium text-gray-700">
-                        正在执行 {progress.type === 'sync' ? '时间恢复' : progress.type === 'rename' ? '重命名' : '深度写入元数据'}...
-                      </span>
-                      <span className="text-sm text-gray-500">{progress.current} / {progress.total}</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
-                      <div className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${Math.max(5, (progress.current / progress.total) * 100)}%` }}></div>
-                    </div>
-                  </div>
-                )}
-                
-                {/* 操作结果提示 */}
-                {processResult && (
-                  <div className="mt-4 p-4 bg-green-50 text-green-800 text-sm rounded-lg border border-green-200 flex items-start space-x-3">
-                    <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-semibold text-green-900">
-                        {processResult.type === 'sync' ? '时间同步完成' : processResult.type === 'rename' ? '重命名完成' : '深度写入元数据完成'}
-                        {processResult.data.stopped ? ' (已终止)' : ''}
-                      </p>
-                      <p className="mt-1">成功: {processResult.data.successCount} 个文件</p>
-                      {processResult.data.errorCount > 0 && (
-                        <p className="text-red-600 mt-1 font-medium">失败: {processResult.data.errorCount} 个文件 (详见控制台)</p>
-                      )}
-                    </div>
-                  </div>
-                )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <button
+                  onClick={handleExportCSV}
+                  disabled={processing || (loading && taskState !== 'paused')}
+                  className="py-4 px-4 bg-slate-900 border border-slate-700 text-slate-300 rounded-lg text-sm font-mono tracking-wide hover:border-slate-500 hover:text-slate-100 disabled:opacity-50 transition-all flex flex-col items-center justify-center space-y-2 group"
+                >
+                  <Download className="w-6 h-6 text-slate-500 group-hover:text-slate-300 transition-colors" />
+                  <span>导出 CSV</span>
+                </button>
+                <button
+                  onClick={handleOpenSyncModal}
+                  disabled={processing || (loading && taskState !== 'paused')}
+                  className="py-4 px-4 bg-slate-900 border border-indigo-900 text-indigo-400 rounded-lg text-sm font-mono tracking-wide hover:border-indigo-600 hover:text-indigo-300 hover:bg-indigo-950/30 disabled:opacity-50 transition-all flex flex-col items-center justify-center space-y-2 group"
+                >
+                  <RefreshCcw className="w-6 h-6 text-indigo-500 group-hover:text-indigo-400 transition-colors" />
+                  <span>物理时间恢复</span>
+                </button>
+                <button
+                  onClick={handleOpenRenameModal}
+                  disabled={processing || (loading && taskState !== 'paused')}
+                  className="py-4 px-4 bg-slate-900 border border-emerald-900 text-emerald-400 rounded-lg text-sm font-mono tracking-wide hover:border-emerald-600 hover:text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-50 transition-all flex flex-col items-center justify-center space-y-2 group"
+                >
+                  <FileEdit className="w-6 h-6 text-emerald-500 group-hover:text-emerald-400 transition-colors" />
+                  <span>规则重命名</span>
+                </button>
               </div>
             )}
 
-            <div className="mb-3 flex justify-between items-center bg-gray-100 p-1.5 rounded-lg w-full flex-wrap gap-2">
-                <div className="flex space-x-1">
+            {/* Progress */}
+            {progress && (
+              <div className="p-4 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="flex justify-between items-center mb-2 font-mono">
+                  <span className="text-xs text-slate-400 tracking-wider">
+                    正在执行 {progress.type === 'sync' ? '时间恢复' : progress.type === 'rename' ? '重命名' : '深度写入元数据'}...
+                  </span>
+                  <span className="text-xs text-cyan-500">{progress.current} / {progress.total}</span>
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div className="bg-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.max(5, (progress.current / progress.total) * 100)}%` }}></div>
+                </div>
+              </div>
+            )}
+            
+            {/* Process Result */}
+            {processResult && (
+              <div className="p-4 bg-emerald-950/20 text-emerald-400 text-sm rounded-lg border border-emerald-900/50 flex items-start space-x-3 font-mono">
+                <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-500" />
+                <div>
+                  <p className="font-bold tracking-wide">
+                    {processResult.type === 'sync' ? '时间同步完成' : processResult.type === 'rename' ? '重命名完成' : '深度写入元数据完成'}
+                    {processResult.data.stopped ? ' (已终止)' : ''}
+                  </p>
+                  <p className="mt-1 text-emerald-500/80 text-xs">成功: {processResult.data.successCount}</p>
+                  {processResult.data.errorCount > 0 && (
+                    <p className="text-red-400 mt-1 text-xs">失败: {processResult.data.errorCount} (详见控制台)</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Table Filters */}
+            <div className="flex justify-between items-center bg-slate-900 p-2 rounded-lg w-full flex-wrap gap-2 border border-slate-800">
+                <div className="flex space-x-2">
                   <button 
                     onClick={() => setViewMode('flat')} 
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'flat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    className={`px-3 py-1.5 text-xs font-mono tracking-wide rounded flex items-center transition-all ${viewMode === 'flat' ? 'bg-cyan-950/50 text-cyan-400 border border-cyan-900' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800 border border-transparent'}`}
                   >
-                    <ListIcon className="w-4 h-4 mr-1.5" /> 列表视图
+                    <ListIcon className="w-3.5 h-3.5 mr-1.5" /> 列表视图
                   </button>
                   <button 
                     onClick={() => setViewMode('tree')} 
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'tree' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    className={`px-3 py-1.5 text-xs font-mono tracking-wide rounded flex items-center transition-all ${viewMode === 'tree' ? 'bg-cyan-950/50 text-cyan-400 border border-cyan-900' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800 border border-transparent'}`}
                   >
-                    <FolderTree className="w-4 h-4 mr-1.5" /> 目录视图
+                    <FolderTree className="w-3.5 h-3.5 mr-1.5" /> 目录视图
                   </button>
                 </div>
                 
-                <div className="flex items-center space-x-2 text-xs">
-                  <Filter className="w-3.5 h-3.5 text-gray-400" />
-                  <span className="text-gray-600 font-medium">时间来源:</span>
+                <div className="flex items-center space-x-3 text-xs font-mono">
+                  <Filter className="w-3.5 h-3.5 text-slate-500" />
+                  <span className="text-slate-400">时间来源:</span>
                   <select 
                     value={timeSourceFilter}
                     onChange={(e) => { setTimeSourceFilter(e.target.value); setPage(1); }}
-                    className="border-none bg-white rounded-md py-1 px-2 shadow-sm focus:ring-1 focus:ring-indigo-500 text-gray-700 outline-none"
+                    className="border-slate-700 bg-slate-950 rounded py-1 px-2 focus:ring-1 focus:ring-cyan-500 text-slate-300 outline-none"
                   >
                     <option value="all">全部来源</option>
                     <option value="内部元数据">仅内部元数据</option>
@@ -570,75 +630,87 @@ export default function App() {
                 </div>
             </div>
 
-            <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded bg-white relative shadow-inner">
+            {/* Data Table */}
+            <div className="border border-slate-800 rounded-lg bg-slate-900/50 relative overflow-hidden">
               {viewMode === 'flat' ? (
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-gray-100 sticky top-0 shadow-sm z-10">
-                    <tr>
-                      <th className="px-4 py-3 font-medium text-gray-600 w-14 text-center">
-                        <TableSelectMenu 
-                          isPageSelected={paginatedResults.length > 0 && paginatedResults.every(f => selectedFiles.has(f.relativePath))}
-                          isAllSelected={sortedResults.length > 0 && sortedResults.every(f => selectedFiles.has(f.relativePath))}
-                          onSelectPage={handleSelectPage}
-                          onSelectAll={handleSelectAll}
-                          onSelectNone={handleSelectNone}
-                          totalItems={sortedResults.length}
-                        />
-                      </th>
-                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('relativePath')}>
-                        <div className="resize-x overflow-hidden flex items-center min-w-[300px]">相对路径 {getSortIcon('relativePath')}</div>
-                      </th>
-                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('type')}>
-                        类型 {getSortIcon('type')}
-                      </th>
-                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('timeSource')}>
-                        时间来源 {getSortIcon('timeSource')}
-                      </th>
-                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('timestamp')}>
-                        解析时间戳 {getSortIcon('timestamp')}
-                      </th>
-                      <th className="px-4 py-3 font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('date')}>
-                        标准时间 {getSortIcon('date')}
-                      </th>
-                      <th className="px-4 py-3 font-medium text-gray-600 text-right cursor-pointer select-none hover:bg-gray-200" onClick={() => requestSort('parseDuration')}>
-                        单文件耗时 {getSortIcon('parseDuration')}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {sortedResults.length === 0 && (
-                      <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">该目录下尚未解析到媒体文件或符合条件的文件</td></tr>
-                    )}
-                    {paginatedResults.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 py-2 text-center">
-                          <input 
-                            type="checkbox" 
-                            className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                            checked={selectedFiles.has(item.relativePath)}
-                            onChange={() => handleToggleSelect(item.relativePath)}
+                <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
+                  <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
+                    <thead className="bg-slate-900/90 backdrop-blur-md sticky top-0 z-10 font-mono tracking-wider">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold text-slate-400 w-14 text-center border-b border-slate-800">
+                          <TableSelectMenu 
+                            isPageSelected={paginatedResults.length > 0 && paginatedResults.every(f => selectedFiles.has(f.relativePath))}
+                            isAllSelected={sortedResults.length > 0 && sortedResults.every(f => selectedFiles.has(f.relativePath))}
+                            onSelectPage={handleSelectPage}
+                            onSelectAll={handleSelectAll}
+                            onSelectNone={handleSelectNone}
+                            totalItems={sortedResults.length}
                           />
-                        </td>
-                        <td className="px-4 py-2 font-mono text-gray-800 break-all" title={item.relativePath}>{item.relativePath}</td>
-                        <td className="px-4 py-2 text-gray-500">{item.type === 'video' ? '视频' : '图片'}</td>
-                        <td className="px-4 py-2">
-                           {item.timeSource === '内部元数据' ? (
-                             <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
-                           ) : (
-                             <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
-                           )}
-                        </td>
-                        <td className="px-4 py-2 font-mono text-gray-500">{item.timestamp}</td>
-                        <td className="px-4 py-2 font-mono text-gray-800">
-                          {formatTime(item.date)}
-                        </td>
-                        <td className="px-4 py-2 text-right font-mono text-emerald-600">{item.parseDuration} ms</td>
+                        </th>
+                        <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:bg-slate-800 border-b border-slate-800 transition-colors" onClick={() => requestSort('relativePath')}>
+                          <div className="flex items-center min-w-[300px] resize-x overflow-hidden">相对路径 {getSortIcon('relativePath')}</div>
+                        </th>
+                        <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:bg-slate-800 border-b border-slate-800 transition-colors" onClick={() => requestSort('type')}>
+                          <div className="flex items-center min-w-[80px] resize-x overflow-hidden">类型 {getSortIcon('type')}</div>
+                        </th>
+                        <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:bg-slate-800 border-b border-slate-800 transition-colors" onClick={() => requestSort('timeSource')}>
+                          <div className="flex items-center min-w-[100px] resize-x overflow-hidden">时间来源 {getSortIcon('timeSource')}</div>
+                        </th>
+                        <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:bg-slate-800 border-b border-slate-800 transition-colors" onClick={() => requestSort('timestamp')}>
+                          <div className="flex items-center min-w-[120px] resize-x overflow-hidden">解析时间戳 {getSortIcon('timestamp')}</div>
+                        </th>
+                        <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:bg-slate-800 border-b border-slate-800 transition-colors" onClick={() => requestSort('date')}>
+                          <div className="flex items-center min-w-[160px] resize-x overflow-hidden">标准时间 {getSortIcon('date')}</div>
+                        </th>
+                        <th className="px-4 py-3 font-semibold text-slate-400 text-right cursor-pointer select-none hover:bg-slate-800 border-b border-slate-800 transition-colors" onClick={() => requestSort('parseDuration')}>
+                          <div className="flex items-center justify-end min-w-[100px] resize-x overflow-hidden">单文件耗时 {getSortIcon('parseDuration')}</div>
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {sortedResults.length === 0 && (
+                        <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-500 font-mono tracking-widest">该目录下尚未解析到媒体文件或符合条件的文件</td></tr>
+                      )}
+                      {paginatedResults.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-800/40 transition-colors group">
+                          <td className="px-4 py-2.5 text-center">
+                            <input 
+                              type="checkbox" 
+                              className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500/50 focus:ring-offset-slate-900 cursor-pointer"
+                              checked={selectedFiles.has(item.relativePath)}
+                              onChange={() => handleToggleSelect(item.relativePath)}
+                            />
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-slate-300 break-all" title={item.relativePath}>{item.relativePath}</td>
+                          <td className="px-4 py-2.5 font-mono">
+                            {item.type === 'video' ? (
+                               <span className="text-indigo-400 bg-indigo-950/40 border border-indigo-900/50 px-2 py-0.5 rounded-full text-[10px]">视频</span>
+                            ) : (
+                               <span className="text-emerald-400 bg-emerald-950/40 border border-emerald-900/50 px-2 py-0.5 rounded-full text-[10px]">图片</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono">
+                             {item.timeSource === '内部元数据' ? (
+                               <span className="text-emerald-400 bg-emerald-950/50 border border-emerald-900/50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+                             ) : (
+                               <span className="text-amber-400 bg-amber-950/50 border border-amber-900/50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+                             )}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-slate-500">{item.timestamp}</td>
+                          <td className="px-4 py-2.5 font-mono text-cyan-100 flex items-center">
+                            {formatTime(item.date)}
+                            {item.timeSource !== '内部元数据' && (
+                              <AlertCircle className="w-3 h-3 text-amber-500 ml-2 opacity-0 group-hover:opacity-100 transition-opacity" title="Warning: Meta absent" />
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-500">{item.parseDuration}ms</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
-                <div className="p-4">
+                <div className="p-4 max-h-[500px] overflow-y-auto custom-scrollbar">
                   {treeData && <TreeNode node={treeData} selectedFiles={selectedFiles} onToggleSelect={handleToggleSelect} />}
                 </div>
               )}
@@ -655,23 +727,65 @@ export default function App() {
           </div>
         )}
 
+        {showSelectWarning && (
+          <div className="absolute inset-0 bg-slate-950/80 z-50 p-6 flex flex-col justify-center items-center backdrop-blur-sm">
+             <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl max-w-sm w-full text-center shadow-2xl">
+                <AlertCircle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+                <h3 className="text-lg font-mono text-slate-200 mb-2">未选择文件</h3>
+                <p className="text-sm font-mono text-slate-400 mb-6 leading-relaxed">
+                  请先在文件列表中勾选需要操作的文件。
+                </p>
+                <button onClick={() => setShowSelectWarning(false)} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-sm rounded-lg transition-colors border border-slate-700">
+                  知道了
+                </button>
+             </div>
+          </div>
+        )}
+
         {isRenameModalOpen && result && (
           <RenamePreviewModal 
             isOpen={isRenameModalOpen}
-            onClose={() => setIsRenameModalOpen(false)}
+            onClose={() => {
+              setIsRenameModalOpen(false);
+              if (processResult) {
+                setProcessResult(null);
+                handleScan();
+              }
+            }}
             files={result.results.filter(f => selectedFiles.has(f.relativePath))}
             folderPath={result.folderPath}
             onExecute={handleExecuteRenameFromModal}
+            processing={processing}
+            progress={progress}
+            processResult={processResult}
+            taskState={taskState}
+            onPauseTask={() => handleTaskAction('pause')}
+            onResumeTask={() => handleTaskAction('resume')}
+            onStopTask={() => handleTaskAction('stop')}
           />
         )}
 
         {isSyncModalOpen && result && (
           <SyncTimePreviewModal 
             isOpen={isSyncModalOpen}
-            onClose={() => setIsSyncModalOpen(false)}
-            files={result.results.filter(f => selectedFiles.has(f.relativePath))}
+            onClose={() => {
+              setIsSyncModalOpen(false);
+              if (processResult && !processResult.data.stopped) {
+                setProcessResult(null);
+                handleScan();
+              }
+            }}
+            files={modalFiles}
             onExecute={handleExecuteSyncFromModal}
             onInjectMetadata={handleExecuteInjectFromModal}
+            processing={processing}
+            progress={progress}
+            processResult={processResult}
+            taskState={taskState}
+            onPauseTask={() => handleTaskAction('pause')}
+            onResumeTask={() => handleTaskAction('resume')}
+            onStopTask={() => handleTaskAction('stop')}
+            onClearResult={handleClearResult}
           />
         )}
       </div>

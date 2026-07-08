@@ -15,7 +15,12 @@ import piexifjs from 'piexifjs';
 
 const execAsync = promisify(exec);
 
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+
+// Configure fluent-ffmpeg to use static binaries
 ffmpeg.setFfprobePath(ffprobeStatic.path);
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -604,11 +609,15 @@ async function startServer() {
     try {
       globalCancelRequested = false;
       const { folderPath, taskId, total, injectPlan } = req.body;
-      const injectSet = new Set<string>();
+      const injectMap = new Map<string, number>();
       
-      // 如果前端传递了需要注入的列表
+      // 如果前端传递了需要注入的列表及其目标时间
       if (Array.isArray(injectPlan)) {
-          injectPlan.forEach(p => injectSet.add(p.relativePath));
+          injectPlan.forEach(p => {
+              if (p.relativePath && p.targetTimestamp) {
+                  injectMap.set(p.relativePath, p.targetTimestamp);
+              }
+          });
       }
       
       if (!folderPath) {
@@ -662,7 +671,7 @@ async function startServer() {
         try {
           const item = JSON.parse(line);
           
-          if (injectSet.size > 0 && !injectSet.has(item.relativePath)) {
+          if (injectMap.size > 0 && !injectMap.has(item.relativePath)) {
               continue;
           }
           
@@ -672,7 +681,8 @@ async function startServer() {
              throw new Error("文件不存在");
           }
 
-          const targetTimestamp = item.timestamp;
+          // 优先使用前端传递的 targetTimestamp
+          const targetTimestamp = injectMap.has(item.relativePath) ? injectMap.get(item.relativePath)! : item.timestamp;
           const d = new Date(targetTimestamp);
           
           if (item.type === 'image') {
@@ -698,9 +708,10 @@ async function startServer() {
                   const exifBytes = piexifjs.dump(exifObj);
                   const newData = piexifjs.insert(exifBytes, fileData);
                   
-                  await fsPromises.writeFile(fullPath, newData, 'binary');
+                  const buffer = Buffer.from(newData, 'binary');
+                  await fsPromises.writeFile(fullPath, buffer);
               } else {
-                  // 其他图片格式暂不处理，或者忽略抛错
+                  throw new Error(`暂不支持该图片格式的元数据注入: ${ext}`);
               }
           } else if (item.type === 'video') {
               const ext = path.extname(fullPath).toLowerCase();
@@ -712,16 +723,18 @@ async function startServer() {
                       ffmpeg(fullPath)
                           .outputOptions([
                               '-c', 'copy',
-                              '-map', '0',
+                              '-map', '0:v', '-map', '0:a?', '-map', '0:s?',
                               '-metadata', `creation_time=${isoString}`
                           ])
                           .output(tempPath)
                           .on('end', () => resolve(true))
-                          .on('error', (err) => reject(err))
+                          .on('error', (err, stdout, stderr) => reject(new Error(`${err.message} stderr: ${stderr}`)))
                           .run();
                   });
                   
                   await fsPromises.rename(tempPath, fullPath);
+              } else {
+                  throw new Error(`暂不支持该视频格式的元数据注入: ${ext}`);
               }
           }
           

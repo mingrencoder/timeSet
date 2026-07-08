@@ -32,9 +32,9 @@ export function Pagination({ page, pageSize, totalItems, onPageChange, onPageSiz
   };
 
   return (
-    <div className="mt-4 flex items-center justify-between text-sm text-gray-600 bg-gray-50 p-2 rounded border border-gray-100 flex-wrap gap-2">
-      <div className="flex items-center space-x-4">
-        <span>共 {totalItems} 条记录</span>
+    <div className="mt-4 flex items-center justify-between text-sm text-slate-400 bg-slate-900/50 p-2 rounded border border-slate-800 flex-wrap gap-2">
+      <div className="flex items-center space-x-4 font-mono">
+        <span>共 {totalItems} 项</span>
         <div className="flex items-center space-x-1">
           <span>每页</span>
           <select 
@@ -43,7 +43,7 @@ export function Pagination({ page, pageSize, totalItems, onPageChange, onPageSiz
               onPageSizeChange(Number(e.target.value));
               onPageChange(1); // Reset to page 1 on page size change
             }}
-            className="border-gray-200 rounded-md py-1 px-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
+            className="border-slate-700 rounded-md py-1 px-2 text-sm focus:ring-cyan-500 focus:border-cyan-500 outline-none bg-slate-950 text-slate-300"
           >
             <option value={10}>10</option>
             <option value={50}>50</option>
@@ -52,25 +52,24 @@ export function Pagination({ page, pageSize, totalItems, onPageChange, onPageSiz
             <option value={500}>500</option>
             <option value={1000}>1000</option>
           </select>
-          <span>条</span>
         </div>
       </div>
-      <div className="flex space-x-2 items-center">
-        <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page === 1} className="px-3 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 disabled:opacity-50 transition-colors shadow-sm">上一页</button>
+      <div className="flex space-x-2 items-center font-mono text-xs">
+        <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page === 1} className="px-3 py-1 bg-slate-800 border border-slate-700 text-slate-300 rounded hover:bg-slate-700 hover:text-white disabled:opacity-30 transition-colors tracking-wider">上一页</button>
         
-        <div className="flex items-center space-x-1">
+        <div className="flex items-center space-x-2 px-2">
           <input 
             type="text" 
             value={jumpValue}
             onChange={(e) => setJumpValue(e.target.value)}
             onBlur={handleJump}
             onKeyDown={handleKeyDown}
-            className="w-12 text-center border border-gray-200 rounded-md py-1 text-sm focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
+            className="w-10 text-center border border-slate-700 rounded-md py-1 text-sm focus:ring-cyan-500 focus:border-cyan-500 outline-none bg-slate-950 text-slate-200"
           />
-          <span className="font-mono text-gray-500">/ {totalPages}</span>
+          <span className="text-slate-600">/ {totalPages}</span>
         </div>
 
-        <button onClick={() => onPageChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} className="px-3 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 disabled:opacity-50 transition-colors shadow-sm">下一页</button>
+        <button onClick={() => onPageChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} className="px-3 py-1 bg-slate-800 border border-slate-700 text-slate-300 rounded hover:bg-slate-700 hover:text-white disabled:opacity-30 transition-colors tracking-wider">下一页</button>
       </div>
     </div>
   );

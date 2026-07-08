@@ -9,6 +9,14 @@ interface SyncTimePreviewModalProps {
   files: any[];
   onExecute: (syncPlan: any[]) => void;
   onInjectMetadata?: (injectPlan: any[]) => void;
+  processing?: boolean;
+  progress?: any;
+  processResult?: any;
+  taskState?: string;
+  onPauseTask?: () => void;
+  onResumeTask?: () => void;
+  onStopTask?: () => void;
+  onClearResult?: () => void;
 }
 
 const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string>, onToggle?: (path: string) => void }> = ({ node, level = 0, selectedPaths, onToggle }) => {
@@ -17,37 +25,37 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string
   if (node.isFile) {
     const isSelected = selectedPaths ? selectedPaths.has(node.original.relativePath) : false;
     return (
-      <div className="flex items-center text-xs py-1.5 hover:bg-gray-50 border-b border-gray-50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
+      <div className="flex items-center text-xs py-1.5 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
         <input 
           type="checkbox" 
           checked={isSelected}
           onChange={() => onToggle && onToggle(node.original.relativePath)}
-          className="mr-3 text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
+          className="mr-3 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500/50 cursor-pointer"
         />
-        <FileText className="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
+        <FileText className="w-4 h-4 text-slate-500 mr-2 flex-shrink-0" />
         <div className="flex-1 min-w-0 flex justify-between gap-4 pr-4 items-center">
-          <span className="text-gray-600 truncate min-w-[100px]" title={node.name}>{node.name}</span>
+          <span className="text-slate-300 font-mono truncate min-w-[100px]" title={node.name}>{node.name}</span>
           <div className="flex items-center space-x-3 truncate flex-shrink-0">
-             <span className="text-gray-500 w-24 text-right">
+             <span className="text-slate-500 w-24 text-right">
                {node.original.timeSource === '内部元数据' ? (
-                 <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+                 <span className="text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
                ) : (
-                 <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+                 <span className="text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
                )}
              </span>
              {node.original.source === 'current' ? (
-               <span className="bg-red-50 text-red-500 text-[10px] px-2 py-0.5 rounded flex-shrink-0 border border-red-100">未匹配</span>
+               <span className="bg-red-500/10 text-red-400 text-[10px] px-2 py-0.5 rounded flex-shrink-0 border border-red-500/20">未匹配</span>
              ) : (
-               <span className="bg-emerald-50 text-emerald-600 text-[10px] px-2 py-0.5 rounded flex-shrink-0 border border-emerald-100" title={`匹配行: ${node.original.rowIndex}\n匹配路径: ${node.original.matchedFilePath}`}>已匹配</span>
+               <span className="bg-emerald-500/10 text-emerald-400 text-[10px] px-2 py-0.5 rounded flex-shrink-0 border border-emerald-500/20" title={`匹配行: ${node.original.rowIndex}\n匹配路径: ${node.original.matchedFilePath}`}>已匹配</span>
              )}
-             <span className={`font-mono text-[11px] w-[130px] text-right ${node.hasChanged ? 'text-emerald-600 font-medium' : 'text-gray-400'}`}>
+             <span className={`font-mono text-[11px] w-[130px] text-right ${node.hasChanged ? 'text-emerald-400 font-medium' : 'text-slate-500'}`}>
                 {node.targetDate}
              </span>
-             <div className="w-[50px] text-right">
+             <div className="w-[50px] text-right font-mono">
                {node.hasChanged ? (
-                  <span className="bg-indigo-50 text-indigo-600 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">需更新</span>
+                  <span className="bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">需更新</span>
                ) : (
-                  <span className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">无变化</span>
+                  <span className="bg-slate-800 border border-slate-700 text-slate-400 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0">无变化</span>
                )}
              </div>
           </div>
@@ -59,13 +67,13 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string
   return (
     <div>
       <div 
-        className="flex items-center text-xs py-2 hover:bg-gray-100 cursor-pointer font-medium text-gray-700 transition-colors rounded-md" 
+        className="flex items-center text-xs py-2 hover:bg-slate-800/50 cursor-pointer font-medium text-slate-300 transition-colors rounded-md" 
         style={{ paddingLeft: `${level * 20}px` }}
         onClick={() => setIsOpen(!isOpen)}
       >
-        {isOpen ? <ChevronDown className="w-4 h-4 text-gray-500 mr-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 mr-1 flex-shrink-0" />}
-        <FolderTree className="w-4 h-4 text-indigo-500 mr-2 flex-shrink-0" />
-        {node.name}
+        {isOpen ? <ChevronDown className="w-4 h-4 text-slate-500 mr-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-500 mr-1 flex-shrink-0" />}
+        <FolderTree className="w-4 h-4 text-indigo-400 mr-2 flex-shrink-0" />
+        <span className="font-mono">{node.name}</span>
       </div>
       {isOpen && (
         <div className="mt-1">
@@ -78,7 +86,7 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string
   );
 };
 
-export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute, onInjectMetadata }: SyncTimePreviewModalProps) {
+export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute, onInjectMetadata, processing, progress, processResult, taskState, onPauseTask, onResumeTask, onStopTask, onClearResult }: SyncTimePreviewModalProps) {
   const [matchStrategy, setMatchStrategy] = useState<'relativePath' | 'filename'>('relativePath');
   const [csvData, setCsvData] = useState<{relativePath: string, timestamp: number, rowIndex: number}[]>([]);
   const [csvLoaded, setCsvLoaded] = useState(false);
@@ -241,6 +249,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
         if (sortConfig.key === 'targetDate') {
           aValue = a.targetTimestamp as never;
           bValue = b.targetTimestamp as never;
+        } else if (sortConfig.key === 'currentDate') {
+          aValue = a.timestamp as never;
+          bValue = b.timestamp as never;
         }
 
         if (aValue < bValue) {
@@ -323,16 +334,27 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
 
   if (!isOpen) return null;
 
+  const [showNoChangeModal, setShowNoChangeModal] = useState(false);
+  const [showUnmatchedModal, setShowUnmatchedModal] = useState(false);
+
   const executeSync = () => {
-    const itemsToSync = Array.from(selectedPaths).map(path => previewData.find(p => p.relativePath === path)).filter(Boolean);
-    const hasAnyChanges = itemsToSync.some(item => item!.hasChanged);
-    
-    if (!hasAnyChanges) {
-      alert("选中的文件无时间修改，无需恢复。");
+    const selectedItems = Array.from(selectedPaths)
+      .map(path => previewData.find(p => p.relativePath === path))
+      .filter(Boolean);
+      
+    const hasUnmatched = selectedItems.some(item => item!.source === 'current');
+    if (hasUnmatched) {
+      setShowUnmatchedModal(true);
       return;
     }
 
-    const syncPlan = itemsToSync.map(item => ({
+    const hasAnyChanges = selectedItems.some(item => item!.hasChanged);
+    if (!hasAnyChanges) {
+      setShowNoChangeModal(true);
+      return;
+    }
+
+    const syncPlan = selectedItems.map(item => ({
       relativePath: item!.relativePath,
       targetTimestamp: item!.targetTimestamp
     }));
@@ -340,16 +362,25 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
   };
 
   const executeInject = () => {
-    const itemsToInject = Array.from(selectedPaths).map(path => previewData.find(p => p.relativePath === path)).filter(Boolean);
-    
-    if (itemsToInject.length === 0) {
+    const selectedItems = Array.from(selectedPaths)
+      .map(path => previewData.find(p => p.relativePath === path))
+      .filter(Boolean);
+      
+    const hasUnmatched = selectedItems.some(item => item!.source === 'current');
+    if (hasUnmatched) {
+      setShowUnmatchedModal(true);
       return;
     }
 
-    const injectPlan = itemsToInject.map(item => ({
+    if (selectedItems.length === 0) {
+      return;
+    }
+
+    const injectPlan = selectedItems.map(item => ({
       relativePath: item!.relativePath,
       targetTimestamp: item!.targetTimestamp
     }));
+
     if (onInjectMetadata) {
       onInjectMetadata(injectPlan);
     }
@@ -361,82 +392,194 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
   const matchedCount = previewData.filter(p => p.source !== 'current').length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 sm:p-6">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[90vw] lg:max-w-[95vw] xl:max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 sm:p-6 font-sans">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-[95vw] 2xl:max-w-[1600px] max-h-[90vh] flex flex-col overflow-hidden">
         
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+        <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
           <div>
-            <h2 className="text-xl font-bold text-gray-900 flex items-center">
+            <h2 className="text-xl font-bold text-slate-100 font-mono tracking-wide flex items-center">
               <Clock className="w-5 h-5 mr-2 text-indigo-500" />
-              恢复物理时间 (通过备份 CSV)
+              物理时间恢复预览 //
             </h2>
-            <p className="text-sm text-gray-500 mt-1">上传之前导出的时间线 CSV 备份文件，精确恢复本地文件的物理时间</p>
+            <p className="text-sm text-slate-500 mt-1 font-mono">上传之前导出的时间线 CSV 备份文件，精确恢复本地文件的物理时间</p>
           </div>
-          <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
+          <button onClick={() => {
+            if (processResult && onClearResult) {
+              onClearResult();
+            } else {
+              onClose();
+            }
+          }} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
+        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row relative">
+          {(processing || processResult) && (
+            <div className="absolute inset-0 bg-slate-950/90 z-50 p-6 flex flex-col justify-center items-center backdrop-blur-sm">
+              {processing && progress && (
+                <div className="w-full max-w-md text-center">
+                  <div className="text-xl font-mono text-indigo-400 mb-4 tracking-wider animate-pulse">执行中...</div>
+                  <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden mb-2">
+                     <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${Math.min(100, Math.max(0, (progress.current / progress.total) * 100))}%` }}></div>
+                  </div>
+                  <div className="text-xs font-mono text-slate-400 mb-6">{progress.current} / {progress.total}</div>
+                  
+                  <div className="flex justify-center space-x-3">
+                     <button onClick={taskState === 'paused' ? onResumeTask : onPauseTask} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded text-xs font-mono text-slate-300">
+                       {taskState === 'paused' ? '继续' : '暂停'}
+                     </button>
+                     <button onClick={onStopTask} className="px-4 py-2 bg-red-950/50 hover:bg-red-900/50 text-red-400 rounded text-xs font-mono">
+                       停止
+                     </button>
+                  </div>
+                </div>
+              )}
+              {processResult && (
+                <div className="w-full max-w-4xl text-center flex flex-col max-h-[80vh] overflow-hidden">
+                  <div className="text-xl font-mono text-emerald-400 mb-4 tracking-wider flex-shrink-0">执行完成</div>
+                  <div className="text-sm font-mono text-slate-300 space-y-2 mb-4 flex-shrink-0">
+                    <div>成功: <span className="text-emerald-400">{processResult.data.successCount}</span></div>
+                    <div>失败: <span className="text-red-400">{processResult.data.errorCount}</span></div>
+                  </div>
+                  
+                  <div className="flex-1 overflow-auto bg-slate-900 border border-slate-800 rounded p-4 mb-4 text-left custom-scrollbar">
+                    <table className="w-full text-xs font-mono text-left">
+                      <thead className="bg-slate-950 sticky top-0 text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="py-2 px-3">文件路径</th>
+                          <th className="py-2 px-3 w-20">状态</th>
+                          <th className="py-2 px-3">详情/目标时间</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {/* 简单重构前端匹配逻辑以展示成功记录，后端未全量返回的话使用前端缓存数据 */}
+                        {Array.from(selectedPaths).map((path, idx) => {
+                           const isError = processResult.data.errors?.find((e: any) => e.path === path);
+                           const item = previewData.find(p => p.relativePath === path);
+                           
+                           return (
+                             <tr key={idx} className="hover:bg-slate-800/40">
+                               <td className="py-2 px-3 text-slate-400 break-all">{path}</td>
+                               <td className="py-2 px-3">
+                                 {isError ? (
+                                   <span className="text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded">失败</span>
+                                 ) : (
+                                   <span className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">成功</span>
+                                 )}
+                               </td>
+                               <td className="py-2 px-3">
+                                 {isError ? (
+                                   <span className="text-red-400">{isError.error}</span>
+                                 ) : (
+                                   <span className="text-slate-500">元数据/时间已更新为: <span className="text-emerald-400">{item?.targetDate || '未知'}</span></span>
+                                 )}
+                               </td>
+                             </tr>
+                           );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  <div className="flex-shrink-0 pb-4">
+                    <button onClick={() => onClearResult ? onClearResult() : onClose()} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded font-mono text-sm tracking-wide text-slate-200 shadow">
+                      返回匹配列表
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {showNoChangeModal && (
+            <div className="absolute inset-0 bg-slate-950/80 z-50 p-6 flex flex-col justify-center items-center backdrop-blur-sm">
+               <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl max-w-sm w-full text-center shadow-2xl">
+                  <AlertCircle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+                  <h3 className="text-lg font-mono text-slate-200 mb-2">未发现时间变更</h3>
+                  <p className="text-sm font-mono text-slate-400 mb-6 leading-relaxed">
+                    您选中的文件时间已经是目标时间，无需执行操作。
+                  </p>
+                  <button onClick={() => setShowNoChangeModal(false)} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-sm rounded-lg transition-colors border border-slate-700">
+                    知道了
+                  </button>
+               </div>
+            </div>
+          )}
+
+          {showUnmatchedModal && (
+            <div className="absolute inset-0 bg-slate-950/80 z-50 p-6 flex flex-col justify-center items-center backdrop-blur-sm">
+               <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl max-w-sm w-full text-center shadow-2xl">
+                  <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+                  <h3 className="text-lg font-mono text-slate-200 mb-2">存在未匹配文件</h3>
+                  <p className="text-sm font-mono text-slate-400 mb-6 leading-relaxed">
+                    当前列表中仍存在未成功匹配到目标恢复时间的文件，请移除这些文件或调整匹配策略后再执行。
+                  </p>
+                  <button onClick={() => setShowUnmatchedModal(false)} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-sm rounded-lg transition-colors border border-slate-700">
+                    知道了
+                  </button>
+               </div>
+            </div>
+          )}
           {/* Left Panel: Settings */}
-          <div className="w-full lg:w-1/3 border-r border-gray-100 flex flex-col bg-gray-50/30">
+          <div className="w-full lg:w-[400px] flex-shrink-0 border-r border-slate-800 flex flex-col bg-slate-950/30">
             <div className="p-5">
               
               {!csvLoaded ? (
-                 <div className="flex flex-col items-center justify-center py-12 px-4 border-2 border-dashed border-gray-300 rounded-xl bg-white hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                 <div className="flex flex-col items-center justify-center py-12 px-4 border border-dashed border-indigo-500/30 rounded-xl bg-slate-900/50 hover:bg-slate-800/80 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                     <Upload className="w-8 h-8 text-indigo-400 mb-3" />
-                    <span className="text-sm font-medium text-gray-700">点击上传 CSV 备份文件</span>
-                    <span className="text-xs text-gray-400 mt-1">需包含原始路径或相对路径以及时间戳列</span>
+                    <span className="text-sm font-mono tracking-wide text-indigo-400">上传 CSV 备份</span>
+                    <span className="text-xs font-mono text-slate-500 mt-1">需包含原始路径或相对路径以及时间戳列</span>
                     <input type="file" accept=".csv" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
                  </div>
               ) : (
                  <>
                    <div className="flex items-center justify-between mb-6">
-                      <h3 className="font-semibold text-gray-800">匹配策略</h3>
-                      <button onClick={() => { setCsvLoaded(false); setCsvData([]); }} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">重新上传</button>
+                      <h3 className="font-semibold font-mono text-slate-300 tracking-wide">匹配策略</h3>
+                      <button onClick={() => { setCsvLoaded(false); setCsvData([]); }} className="text-xs text-indigo-400 hover:text-indigo-300 font-mono tracking-wide bg-indigo-950/30 border border-indigo-900/50 px-2 py-1 rounded">重新上传</button>
                    </div>
                    
                    <div className="space-y-3">
-                     <label className={`block p-3 rounded-lg border cursor-pointer transition-all ${matchStrategy === 'relativePath' ? 'border-indigo-500 bg-indigo-50/50 shadow-sm ring-1 ring-indigo-500' : 'border-gray-200 bg-white hover:border-indigo-300'}`}>
+                     <label className={`block p-3 rounded-lg border cursor-pointer transition-all ${matchStrategy === 'relativePath' ? 'border-indigo-500/50 bg-indigo-950/30 ring-1 ring-indigo-500/50' : 'border-slate-800 bg-slate-900 hover:border-indigo-500/30'}`}>
                        <div className="flex items-center">
-                         <input type="radio" checked={matchStrategy === 'relativePath'} onChange={() => setMatchStrategy('relativePath')} className="text-indigo-600 focus:ring-indigo-500 mr-3" />
+                         <input type="radio" checked={matchStrategy === 'relativePath'} onChange={() => setMatchStrategy('relativePath')} className="text-indigo-500 focus:ring-indigo-500/50 mr-3 bg-slate-900 border-slate-700" />
                          <div>
-                           <div className="font-medium text-gray-900 text-sm">按相对路径匹配 (推荐)</div>
-                           <div className="text-xs text-gray-500 mt-1">通过精确的相对路径进行匹配恢复，防冲突。</div>
+                           <div className="font-medium font-mono tracking-wide text-slate-200 text-sm">完整相对路径 (推荐)</div>
+                           <div className="text-xs font-mono text-slate-500 mt-1">通过精确的相对路径进行匹配恢复，防冲突。</div>
                          </div>
                        </div>
                      </label>
                      
-                     <label className={`block p-3 rounded-lg border cursor-pointer transition-all ${matchStrategy === 'filename' ? 'border-indigo-500 bg-indigo-50/50 shadow-sm ring-1 ring-indigo-500' : 'border-gray-200 bg-white hover:border-indigo-300'}`}>
+                     <label className={`block p-3 rounded-lg border cursor-pointer transition-all ${matchStrategy === 'filename' ? 'border-indigo-500/50 bg-indigo-950/30 ring-1 ring-indigo-500/50' : 'border-slate-800 bg-slate-900 hover:border-indigo-500/30'}`}>
                        <div className="flex items-center">
-                         <input type="radio" checked={matchStrategy === 'filename'} onChange={() => setMatchStrategy('filename')} className="text-indigo-600 focus:ring-indigo-500 mr-3" />
+                         <input type="radio" checked={matchStrategy === 'filename'} onChange={() => setMatchStrategy('filename')} className="text-indigo-500 focus:ring-indigo-500/50 mr-3 bg-slate-900 border-slate-700" />
                          <div>
-                           <div className="font-medium text-gray-900 text-sm">仅按文件名匹配</div>
-                           <div className="text-xs text-gray-500 mt-1">适用于文件结构发生变化，但文件名未变的场景。</div>
+                           <div className="font-medium font-mono tracking-wide text-slate-200 text-sm">仅文件名匹配</div>
+                           <div className="text-xs font-mono text-slate-500 mt-1">适用于文件结构发生变化，但文件名未变的场景。</div>
                          </div>
                        </div>
                      </label>
                    </div>
 
-                   <div className="mt-8 pt-6 border-t border-gray-200">
-                     <h3 className="font-semibold text-gray-800 mb-3 text-sm">解析统计</h3>
+                   <div className="mt-8 pt-6 border-t border-slate-800">
+                     <h3 className="font-semibold font-mono text-slate-300 mb-3 text-sm tracking-wide">解析统计</h3>
                      <div className="space-y-2 text-xs">
-                       <div className="flex justify-between items-center bg-white p-2 rounded border border-indigo-100 bg-indigo-50/30">
-                         <span className="text-indigo-700 font-medium">已勾选恢复数量</span>
-                         <span className="font-bold text-indigo-700">{selectedPaths.size}</span>
+                       <div className="flex justify-between items-center p-2 rounded border border-indigo-900/50 bg-indigo-950/20 font-mono">
+                         <span className="text-indigo-400 font-medium">已选待恢复数</span>
+                         <span className="font-bold text-indigo-400">{selectedPaths.size}</span>
                        </div>
-                       <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
-                         <span className="text-gray-600">当前成功匹配</span>
-                         <span className="font-medium text-emerald-600">{matchedCount}</span>
+                       <div className="flex justify-between items-center p-2 rounded border border-slate-800 bg-slate-900/50 font-mono">
+                         <span className="text-slate-400">成功匹配数</span>
+                         <span className="font-medium text-emerald-400">{matchedCount}</span>
                        </div>
-                       <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
-                         <span className="text-gray-600">未匹配项</span>
-                         <span className="font-medium text-orange-600">{files.length - matchedCount}</span>
+                       <div className="flex justify-between items-center p-2 rounded border border-slate-800 bg-slate-900/50 font-mono">
+                         <span className="text-slate-400">未匹配数</span>
+                         <span className="font-medium text-amber-400">{files.length - matchedCount}</span>
                        </div>
-                       <div className="flex justify-between items-center bg-white p-2 rounded border border-gray-100">
-                         <span className="text-gray-400">CSV 备份文件条目数 (供参考)</span>
-                         <span className="font-medium text-gray-500">{csvData.length}</span>
+                       <div className="flex justify-between items-center p-2 rounded border border-slate-800 bg-slate-900/50 font-mono">
+                         <span className="text-slate-500">CSV 总行数 (供参考)</span>
+                         <span className="font-medium text-slate-500">{csvData.length}</span>
                        </div>
                      </div>
                    </div>
@@ -447,30 +590,30 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
           </div>
 
           {/* Right Panel: Preview */}
-          <div className="w-full lg:w-2/3 flex flex-col bg-white">
-            <div className="px-6 py-3 border-b border-gray-100 flex justify-between items-center bg-white z-10">
-              <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+          <div className="w-full lg:flex-1 flex flex-col bg-slate-900 min-w-0">
+            <div className="px-6 py-3 border-b border-slate-800 flex justify-between items-center bg-slate-900 z-10">
+              <div className="flex space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
                 <button 
                   onClick={() => setViewMode('flat')} 
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'flat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`px-3 py-1.5 text-xs font-mono tracking-wide rounded flex items-center transition-all ${viewMode === 'flat' ? 'bg-indigo-950/50 text-indigo-400 border border-indigo-900' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800 border border-transparent'}`}
                 >
-                  <ListIcon className="w-4 h-4 mr-1.5" /> 列表视图
+                  <ListIcon className="w-3.5 h-3.5 mr-1.5" /> 列表视图
                 </button>
                 <button 
                   onClick={() => setViewMode('tree')} 
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center transition-shadow ${viewMode === 'tree' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`px-3 py-1.5 text-xs font-mono tracking-wide rounded flex items-center transition-all ${viewMode === 'tree' ? 'bg-indigo-950/50 text-indigo-400 border border-indigo-900' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800 border border-transparent'}`}
                 >
-                  <FolderTree className="w-4 h-4 mr-1.5" /> 目录视图
+                  <FolderTree className="w-3.5 h-3.5 mr-1.5" /> 目录视图
                 </button>
               </div>
 
               <div className="flex items-center space-x-4">
                  <div className="flex items-center space-x-2 text-xs">
-                   <Filter className="w-3.5 h-3.5 text-gray-400" />
+                   <Filter className="w-3.5 h-3.5 text-slate-500" />
                    <select 
                      value={timeSourceFilter}
                      onChange={(e) => { setTimeSourceFilter(e.target.value); setPage(1); }}
-                     className="border-none bg-gray-50 hover:bg-gray-100 rounded-md py-1.5 px-2 cursor-pointer focus:ring-1 focus:ring-indigo-500 text-gray-700 outline-none transition-colors border border-gray-200 font-medium"
+                     className="border-none bg-slate-950 hover:bg-slate-800 rounded-md py-1.5 px-2 cursor-pointer focus:ring-1 focus:ring-indigo-500 text-slate-300 outline-none transition-colors border border-slate-800 font-mono text-xs"
                    >
                      <option value="all">全部来源</option>
                      <option value="内部元数据">仅内部元数据</option>
@@ -478,21 +621,21 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                    </select>
                  </div>
                  <div className="flex space-x-2">
-                   <label className="flex items-center space-x-1.5 text-xs text-gray-500 font-medium cursor-pointer bg-gray-50 hover:bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 transition-colors">
+                   <label className="flex items-center space-x-1.5 text-xs text-slate-400 font-mono cursor-pointer bg-slate-950 hover:bg-slate-800 px-2 py-1.5 rounded-lg border border-slate-800 transition-colors">
                      <input 
                        type="checkbox" 
                        checked={onlyMatched} 
                        onChange={(e) => { setOnlyMatched(e.target.checked); setPage(1); }} 
-                       className="rounded text-indigo-600 focus:ring-indigo-500" 
+                       className="rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500/50" 
                      />
                      <span>仅显示匹配项</span>
                    </label>
-                   <label className="flex items-center space-x-1.5 text-xs text-gray-500 font-medium cursor-pointer bg-gray-50 hover:bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 transition-colors">
+                   <label className="flex items-center space-x-1.5 text-xs text-slate-400 font-mono cursor-pointer bg-slate-950 hover:bg-slate-800 px-2 py-1.5 rounded-lg border border-slate-800 transition-colors">
                      <input 
                        type="checkbox" 
                        checked={onlyDifferences} 
                        onChange={(e) => { setOnlyDifferences(e.target.checked); setPage(1); }} 
-                       className="rounded text-indigo-600 focus:ring-indigo-500" 
+                       className="rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500/50" 
                      />
                      <span>仅显示差异项</span>
                    </label>
@@ -500,14 +643,14 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto bg-white">
+            <div className="flex-1 overflow-y-auto bg-slate-900 custom-scrollbar">
               {!csvLoaded ? (
-                 <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                 <div className="h-full flex items-center justify-center text-slate-500 font-mono text-sm tracking-wide">
                    请先在左侧上传 CSV 文件
                  </div>
               ) : viewMode === 'flat' ? (
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-gray-50 sticky top-0 shadow-sm z-10 border-b border-gray-100">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900/90 backdrop-blur-md sticky top-0 shadow-sm z-10 border-b border-slate-800 font-mono tracking-wider">
                     <tr>
                       <th className="px-4 py-3 w-14">
                         <TableSelectMenu 
@@ -519,74 +662,76 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                           totalItems={filteredData.length}
                         />
                       </th>
-                      <th className="px-4 py-3 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => requestSort('relativePath')}>
-                        <div className="resize-x overflow-hidden flex items-center min-w-[200px]">原文件 (相对路径) {getSortIcon('relativePath')}</div>
+                      <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:text-slate-300 transition-colors" onClick={() => requestSort('relativePath')}>
+                        <div className="flex items-center min-w-[200px] resize-x overflow-hidden">原文件 (相对路径) {getSortIcon('relativePath')}</div>
                       </th>
-                      <th className="px-4 py-3 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => requestSort('timeSource')}>
-                        <div className="resize-x overflow-hidden flex items-center min-w-[100px]">时间来源 {getSortIcon('timeSource')}</div>
+                      <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:text-slate-300 transition-colors" onClick={() => requestSort('timeSource')}>
+                        <div className="flex items-center min-w-[100px] resize-x overflow-hidden">时间来源 {getSortIcon('timeSource')}</div>
                       </th>
-                      <th className="px-4 py-3 font-semibold text-gray-600">
-                        <div className="resize-x overflow-hidden flex items-center min-w-[100px]">匹配详情</div>
+                      <th className="px-4 py-3 font-semibold text-slate-400">
+                        <div className="flex items-center min-w-[100px] resize-x overflow-hidden">匹配详情</div>
                       </th>
-                      <th className="px-4 py-3 font-semibold text-gray-600">
-                        <div className="resize-x overflow-hidden flex items-center min-w-[120px]">当前物理时间</div>
+                      <th className="px-4 py-3 font-semibold text-slate-400 cursor-pointer select-none hover:text-slate-300 transition-colors" onClick={() => requestSort('currentDate')}>
+                        <div className="flex items-center min-w-[120px] resize-x overflow-hidden">当前物理时间 {getSortIcon('currentDate')}</div>
                       </th>
-                      <th className="px-4 py-3 font-semibold text-emerald-600 cursor-pointer select-none" onClick={() => requestSort('targetDate')}>
-                        <div className="resize-x overflow-hidden flex items-center min-w-[120px]">目标恢复时间 {getSortIcon('targetDate')}</div>
+                      <th className="px-4 py-3 font-semibold text-emerald-500 cursor-pointer select-none hover:text-emerald-400 transition-colors" onClick={() => requestSort('targetDate')}>
+                        <div className="flex items-center min-w-[120px] resize-x overflow-hidden">目标恢复时间 {getSortIcon('targetDate')}</div>
                       </th>
-                      <th className="px-4 py-3 font-semibold text-gray-600">变化状态</th>
+                      <th className="px-4 py-3 font-semibold text-slate-400">
+                        <div className="flex items-center min-w-[80px] resize-x overflow-hidden">变化状态</div>
+                      </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-slate-800/50">
                     {paginatedData.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                      <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
                         <td className="px-4 py-3">
                           <input 
                              type="checkbox" 
                              checked={selectedPaths.has(item.relativePath)}
                              onChange={() => toggleSelection(item.relativePath)}
-                             className="text-indigo-600 focus:ring-indigo-500 rounded border-gray-300"
+                             className="text-indigo-500 focus:ring-indigo-500/50 rounded border-slate-700 bg-slate-900"
                            />
                         </td>
-                        <td className="px-4 py-3 text-gray-700 break-all" title={item.relativePath}>
+                        <td className="px-4 py-3 text-slate-400 font-mono break-all" title={item.relativePath}>
                           {item.relativePath}
                         </td>
                         <td className="px-4 py-3">
                            {item.timeSource === '内部元数据' ? (
-                             <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
+                             <span className="text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[10px]">内部元数据</span>
                            ) : (
-                             <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
+                             <span className="text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded text-[10px]">文件系统时间</span>
                            )}
                         </td>
                         <td className="px-4 py-3">
                           {item.source === 'current' ? (
-                            <span className="bg-red-50 text-red-500 text-[10px] px-1.5 py-0.5 rounded border border-red-100">未匹配</span>
+                            <span className="bg-red-500/10 text-red-400 text-[10px] px-1.5 py-0.5 rounded border border-red-500/20">未匹配</span>
                           ) : (
                             <div className="flex flex-col space-y-0.5">
-                              <span className="bg-emerald-50 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded border border-emerald-100 w-fit">已匹配 (行: {item.rowIndex})</span>
+                              <span className="bg-emerald-500/10 text-emerald-400 text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/20 w-fit">已匹配 (行: {item.rowIndex})</span>
                               {item.matchedFilePath !== item.relativePath && (
-                                <span className="text-[10px] text-gray-400 truncate max-w-[200px]" title={item.matchedFilePath}>
+                                <span className="text-[10px] text-slate-500 truncate max-w-[200px]" title={item.matchedFilePath}>
                                   从: {item.matchedFilePath}
                                 </span>
                               )}
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3 font-mono text-gray-500">
+                        <td className="px-4 py-3 font-mono text-slate-500">
                           {item.currentDate}
                         </td>
                         <td className="px-4 py-3 font-mono">
                           {item.hasChanged ? (
-                            <span className="text-emerald-600 font-medium">{item.targetDate}</span>
+                            <span className="text-emerald-400 font-medium">{item.targetDate}</span>
                           ) : (
-                            <span className="text-gray-400">{item.targetDate}</span>
+                            <span className="text-slate-500">{item.targetDate}</span>
                           )}
                         </td>
                         <td className="px-4 py-3">
                           {item.hasChanged ? (
-                             <span className="bg-indigo-50 text-indigo-600 text-[10px] px-1.5 py-0.5 rounded">需更新</span>
+                             <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 text-[10px] px-1.5 py-0.5 rounded">需更新</span>
                           ) : (
-                             <span className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded">无变化</span>
+                             <span className="bg-slate-800 border border-slate-700 text-slate-400 text-[10px] px-1.5 py-0.5 rounded">无变化</span>
                           )}
                         </td>
                       </tr>
@@ -601,7 +746,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
             </div>
 
             {/* Pagination & Action */}
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center bg-gray-50/80 backdrop-blur">
+            <div className="px-6 py-4 border-t border-slate-800 flex justify-between items-center bg-slate-950/80 backdrop-blur">
               <div className="flex-1 mr-4">
                 {viewMode === 'flat' ? (
                   <Pagination 
@@ -612,27 +757,28 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                     onPageSizeChange={setPageSize} 
                   />
                 ) : (
-                  <div className="text-xs font-medium text-gray-600 mt-4 bg-gray-50 p-2 rounded border border-gray-100 flex items-center h-[52px]">已选 {selectedPaths.size} / {filteredData.length} 项</div>
+                  <div className="text-xs font-mono text-indigo-400 mt-4 bg-slate-900 p-2 rounded border border-indigo-900/50 flex items-center h-[52px]">已选择: {selectedPaths.size} / {filteredData.length}</div>
                 )}
               </div>
               <div className="flex-shrink-0 mt-4 flex items-center space-x-3">
+                <span className="text-xs font-mono text-indigo-400 mr-2">已选中 {selectedPaths.size} 项</span>
                 <button 
                   onClick={executeSync}
                   disabled={selectedPaths.size === 0 || !csvLoaded}
-                  className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all flex items-center shadow-md"
+                  className="px-6 py-2.5 bg-indigo-950/50 text-indigo-400 border border-indigo-900 rounded-lg text-sm font-mono tracking-widest hover:bg-indigo-900 disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center"
                 >
                   <Play className="w-4 h-4 mr-2" />
-                  执行选中的 {selectedPaths.size} 项时间恢复
+                  修改时间
                 </button>
                 {onInjectMetadata && (
                   <button 
                     onClick={executeInject}
                     disabled={selectedPaths.size === 0 || !csvLoaded}
-                    className="px-6 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-sm font-medium hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-all flex items-center shadow-md"
+                    className="px-6 py-2.5 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-lg text-sm font-mono tracking-widest hover:bg-emerald-900 disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center"
                     title="将时间物理写入文件元数据中"
                   >
                     <Play className="w-4 h-4 mr-2" />
-                    写入时间元数据
+                    写入元数据
                   </button>
                 )}
               </div>

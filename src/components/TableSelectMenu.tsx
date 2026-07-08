@@ -18,13 +18,13 @@ export function TableSelectMenu({
   totalItems 
 }: TableSelectMenuProps) {
   return (
-    <div className="flex flex-col items-center justify-center space-y-1.5 font-normal">
+    <div className="flex flex-row items-center justify-center space-x-1.5 font-normal">
       <button
         onClick={onSelectPage}
-        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors w-10 ${
+        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors w-10 font-mono ${
           isPageSelected 
-            ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
-            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+            ? 'bg-cyan-950/50 border-cyan-800 text-cyan-400' 
+            : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-300'
         }`}
         title="本页全选/取消"
       >
@@ -32,14 +32,14 @@ export function TableSelectMenu({
       </button>
       <button
         onClick={isAllSelected ? onSelectNone : onSelectAll}
-        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors w-10 whitespace-nowrap ${
+        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors w-10 whitespace-nowrap font-mono ${
           isAllSelected
-            ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+            ? 'bg-cyan-950/50 border-cyan-800 text-cyan-400'
+            : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-300'
         }`}
         title={`所有全选 (${totalItems})`}
       >
-        所有
+        全部
       </button>
     </div>
   );
