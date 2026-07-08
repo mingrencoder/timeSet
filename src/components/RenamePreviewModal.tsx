@@ -393,6 +393,7 @@ export default function RenamePreviewModal({ isOpen, onClose, files, folderPath,
                            <div className="mr-3">
                              <TableSelectMenu 
                                isPageSelected={paginatedData.length > 0 && paginatedData.every(f => selectedPaths.has(f.relativePath))}
+                               isAllSelected={filteredData.length > 0 && selectedPaths.size === filteredData.length}
                                onSelectPage={handleSelectPage}
                                onSelectAll={handleSelectAll}
                                onSelectNone={handleSelectNone}

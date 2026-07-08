@@ -261,6 +261,16 @@ export default function App() {
     executeStreamOp('/api/rename-files', { folderPath: result?.folderPath, renamePlan, total: renamePlan.length || result?.total }, 'rename');
   };
 
+  const handleExecuteInjectFromModal = (injectPlan: any[]) => {
+    setIsSyncModalOpen(false);
+    executeStreamOp('/api/inject-metadata', { 
+      folderPath: result?.folderPath, 
+      injectPlan: injectPlan,
+      total: injectPlan.length 
+    }, 'inject');
+  };
+
+
   const handleScan = async () => {
     if (!inputPath.trim()) {
       setError('请输入有效的绝对路径');
@@ -500,7 +510,7 @@ export default function App() {
                   <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-sm font-medium text-gray-700">
-                        正在执行 {progress.type === 'sync' ? '时间恢复' : '重命名'}...
+                        正在执行 {progress.type === 'sync' ? '时间恢复' : progress.type === 'rename' ? '重命名' : '深度写入元数据'}...
                       </span>
                       <span className="text-sm text-gray-500">{progress.current} / {progress.total}</span>
                     </div>
@@ -516,7 +526,7 @@ export default function App() {
                     <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="font-semibold text-green-900">
-                        {processResult.type === 'sync' ? '时间同步完成' : '重命名完成'}
+                        {processResult.type === 'sync' ? '时间同步完成' : processResult.type === 'rename' ? '重命名完成' : '深度写入元数据完成'}
                         {processResult.data.stopped ? ' (已终止)' : ''}
                       </p>
                       <p className="mt-1">成功: {processResult.data.successCount} 个文件</p>
@@ -661,6 +671,7 @@ export default function App() {
             onClose={() => setIsSyncModalOpen(false)}
             files={result.results.filter(f => selectedFiles.has(f.relativePath))}
             onExecute={handleExecuteSyncFromModal}
+            onInjectMetadata={handleExecuteInjectFromModal}
           />
         )}
       </div>

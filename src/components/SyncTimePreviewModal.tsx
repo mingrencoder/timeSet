@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { X, Play, Clock, Upload, FileText, FolderTree, List as ListIcon, ChevronDown, ChevronRight, Filter } from 'lucide-react';
+import { X, Play, Clock, Upload, FileText, FolderTree, List as ListIcon, ChevronDown, ChevronRight, Filter, AlertCircle } from 'lucide-react';
 import { Pagination } from './Pagination';
 import { TableSelectMenu } from './TableSelectMenu';
 
@@ -8,6 +8,7 @@ interface SyncTimePreviewModalProps {
   onClose: () => void;
   files: any[];
   onExecute: (syncPlan: any[]) => void;
+  onInjectMetadata?: (injectPlan: any[]) => void;
 }
 
 const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string>, onToggle?: (path: string) => void }> = ({ node, level = 0, selectedPaths, onToggle }) => {
@@ -77,7 +78,7 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedPaths?: Set<string
   );
 };
 
-export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute }: SyncTimePreviewModalProps) {
+export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute, onInjectMetadata }: SyncTimePreviewModalProps) {
   const [matchStrategy, setMatchStrategy] = useState<'relativePath' | 'filename'>('relativePath');
   const [csvData, setCsvData] = useState<{relativePath: string, timestamp: number, rowIndex: number}[]>([]);
   const [csvLoaded, setCsvLoaded] = useState(false);
@@ -338,6 +339,22 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
     onExecute(syncPlan);
   };
 
+  const executeInject = () => {
+    const itemsToInject = Array.from(selectedPaths).map(path => previewData.find(p => p.relativePath === path)).filter(Boolean);
+    
+    if (itemsToInject.length === 0) {
+      return;
+    }
+
+    const injectPlan = itemsToInject.map(item => ({
+      relativePath: item!.relativePath,
+      targetTimestamp: item!.targetTimestamp
+    }));
+    if (onInjectMetadata) {
+      onInjectMetadata(injectPlan);
+    }
+  };
+
   const totalPages = Math.ceil(filteredData.length / pageSize);
   const paginatedData = sortedFilteredData.slice((page - 1) * pageSize, page * pageSize);
 
@@ -495,6 +512,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                       <th className="px-4 py-3 w-14">
                         <TableSelectMenu 
                           isPageSelected={paginatedData.length > 0 && paginatedData.every(f => selectedPaths.has(f.relativePath))}
+                          isAllSelected={filteredData.length > 0 && selectedPaths.size === filteredData.length}
                           onSelectPage={handleSelectPage}
                           onSelectAll={handleSelectAll}
                           onSelectNone={handleSelectNone}
@@ -597,7 +615,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                   <div className="text-xs font-medium text-gray-600 mt-4 bg-gray-50 p-2 rounded border border-gray-100 flex items-center h-[52px]">已选 {selectedPaths.size} / {filteredData.length} 项</div>
                 )}
               </div>
-              <div className="flex-shrink-0 mt-4">
+              <div className="flex-shrink-0 mt-4 flex items-center space-x-3">
                 <button 
                   onClick={executeSync}
                   disabled={selectedPaths.size === 0 || !csvLoaded}
@@ -606,6 +624,17 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                   <Play className="w-4 h-4 mr-2" />
                   执行选中的 {selectedPaths.size} 项时间恢复
                 </button>
+                {onInjectMetadata && (
+                  <button 
+                    onClick={executeInject}
+                    disabled={selectedPaths.size === 0 || !csvLoaded}
+                    className="px-6 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-sm font-medium hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-all flex items-center shadow-md"
+                    title="将时间物理写入文件元数据中"
+                  >
+                    <Play className="w-4 h-4 mr-2" />
+                    写入时间元数据
+                  </button>
+                )}
               </div>
             </div>
           </div>

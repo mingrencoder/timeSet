@@ -11,6 +11,7 @@ import os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import readline from 'readline';
+import piexifjs from 'piexifjs';
 
 const execAsync = promisify(exec);
 
@@ -571,6 +572,164 @@ async function startServer() {
           errorCount++;
           if (errors.length < 50) {
              errors.push({ error: err.message });
+          }
+        }
+
+        currentCount++;
+        if (currentCount % 10 === 0) {
+          sendEvent({ type: 'progress', current: currentCount, total: totalCount || currentCount });
+        }
+      }
+
+      sendEvent({ type: 'done', successCount, errorCount, errors, stopped: isStopped });
+      if (taskId) tasks.delete(taskId);
+      res.end();
+    } catch (err: any) {
+      sendEvent({ type: 'error', error: err.message });
+      res.end();
+    }
+  });
+
+  // 接口3：深度写入元数据 (流式进度)
+  app.post('/api/inject-metadata', async (req: express.Request, res: express.Response): Promise<any> => {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendEvent = (data: any) => {
+        res.write(JSON.stringify(data) + '\n');
+    };
+
+    try {
+      globalCancelRequested = false;
+      const { folderPath, taskId, total, injectPlan } = req.body;
+      const injectSet = new Set<string>();
+      
+      // 如果前端传递了需要注入的列表
+      if (Array.isArray(injectPlan)) {
+          injectPlan.forEach(p => injectSet.add(p.relativePath));
+      }
+      
+      if (!folderPath) {
+        sendEvent({ type: 'error', error: '无效的请求参数' });
+        return res.end();
+      }
+
+      if (taskId) {
+          tasks.set(taskId, { state: 'running' });
+      }
+
+      const cacheFilePath = path.join(os.tmpdir(), '.scan_cache.jsonl');
+      if (!fs.existsSync(cacheFilePath)) {
+          sendEvent({ type: 'error', error: '缓存文件不存在，请重新扫描' });
+          return res.end();
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+      const errors = [];
+      const totalCount = total || 0;
+      let currentCount = 0;
+      let isStopped = false;
+
+      const rl = readline.createInterface({
+          input: fs.createReadStream(cacheFilePath),
+          crlfDelay: Infinity
+      });
+
+      for await (const line of rl) {
+        if (globalCancelRequested) {
+            isStopped = true;
+            rl.close();
+            break;
+        }
+        
+        if (taskId) {
+            while (tasks.get(taskId)?.state === 'paused') {
+                if (globalCancelRequested) break;
+                await new Promise(r => setTimeout(r, 500));
+            }
+            if (tasks.get(taskId)?.state === 'stopped' || globalCancelRequested) {
+                isStopped = true;
+                rl.close();
+                break;
+            }
+        }
+
+        if (!line.trim()) continue;
+        
+        try {
+          const item = JSON.parse(line);
+          
+          if (injectSet.size > 0 && !injectSet.has(item.relativePath)) {
+              continue;
+          }
+          
+          const fullPath = path.join(folderPath, item.relativePath);
+          
+          if (!fs.existsSync(fullPath)) {
+             throw new Error("文件不存在");
+          }
+
+          const targetTimestamp = item.timestamp;
+          const d = new Date(targetTimestamp);
+          
+          if (item.type === 'image') {
+              const ext = path.extname(fullPath).toLowerCase();
+              if (['.jpg', '.jpeg'].includes(ext)) {
+                  // piexifjs requires binary string
+                  const fileData = await fsPromises.readFile(fullPath, 'binary');
+                  let exifObj;
+                  try {
+                      exifObj = piexifjs.load(fileData);
+                  } catch (e) {
+                      exifObj = { '0th': {}, 'Exif': {}, 'GPS': {}, '1st': {}, 'Interop': {} };
+                  }
+                  
+                  // Format: YYYY:MM:DD HH:mm:ss
+                  const pad = (n: number) => n.toString().padStart(2, '0');
+                  const exifDateStr = `${d.getFullYear()}:${pad(d.getMonth() + 1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                  
+                  exifObj['0th'][piexifjs.ImageIFD.DateTime] = exifDateStr;
+                  exifObj['Exif'][piexifjs.ExifIFD.DateTimeOriginal] = exifDateStr;
+                  exifObj['Exif'][piexifjs.ExifIFD.DateTimeDigitized] = exifDateStr;
+                  
+                  const exifBytes = piexifjs.dump(exifObj);
+                  const newData = piexifjs.insert(exifBytes, fileData);
+                  
+                  await fsPromises.writeFile(fullPath, newData, 'binary');
+              } else {
+                  // 其他图片格式暂不处理，或者忽略抛错
+              }
+          } else if (item.type === 'video') {
+              const ext = path.extname(fullPath).toLowerCase();
+              if (['.mp4', '.mov'].includes(ext)) {
+                  const tempPath = fullPath + '_temp' + ext;
+                  const isoString = d.toISOString();
+                  
+                  await new Promise((resolve, reject) => {
+                      ffmpeg(fullPath)
+                          .outputOptions([
+                              '-c', 'copy',
+                              '-map', '0',
+                              '-metadata', `creation_time=${isoString}`
+                          ])
+                          .output(tempPath)
+                          .on('end', () => resolve(true))
+                          .on('error', (err) => reject(err))
+                          .run();
+                  });
+                  
+                  await fsPromises.rename(tempPath, fullPath);
+              }
+          }
+          
+          successCount++;
+        } catch (err: any) {
+          errorCount++;
+          if (errors.length < 50) {
+             errors.push({ error: err.message, path: JSON.parse(line).relativePath });
           }
         }
 
