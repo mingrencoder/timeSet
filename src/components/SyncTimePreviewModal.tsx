@@ -8,7 +8,7 @@ interface SyncTimePreviewModalProps {
   onClose: () => void;
   files: any[];
   onExecute: (syncPlan: any[]) => void;
-  onInjectMetadata?: (injectPlan: any[]) => void;
+  onInjectMetadata?: (injectPlan: any[], skippedCount?: number) => void;
   processing?: boolean;
   progress?: any;
   processResult?: any;
@@ -105,10 +105,8 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
+    const parseText = (text: string) => {
       try {
-        const text = event.target?.result as string;
         const rows = text.split('\n');
         
         if (rows.length <= 1) return;
@@ -142,8 +140,43 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
           cols.push(current);
 
           if (cols.length >= 4) {
-            const relativePath = cols[1].trim();
-            const timestamp = parseInt(cols[3], 10);
+            let relativePath = cols[1]?.trim() || '';
+            relativePath = relativePath.replace(/^"|"$/g, '').replace(/""/g, '"');
+            
+            const timestampStr = cols[3]?.trim().replace(/^"|"$/g, '') || '';
+            let formattedTimeStr = cols[4]?.trim().replace(/^"|"$/g, '');
+            
+            let originalTimestamp = parseInt(timestampStr, 10);
+            let timestamp = originalTimestamp;
+            
+            if (formattedTimeStr) {
+               formattedTimeStr = formattedTimeStr.replace(/^\t|="|"$/g, '').trim();
+               
+               const match = formattedTimeStr.match(/^(\d{4})[^\d](\d{1,2})[^\d](\d{1,2})[\sT]+(\d{1,2})[^\d](\d{1,2})(?:[^\d](\d{1,2}))?/);
+               if (match) {
+                   const year = parseInt(match[1], 10);
+                   const month = parseInt(match[2], 10) - 1;
+                   const day = parseInt(match[3], 10);
+                   const hour = parseInt(match[4], 10);
+                   const min = parseInt(match[5], 10);
+                   const sec = match[6] ? parseInt(match[6], 10) : 0;
+                   
+                   const utcDate = new Date(Date.UTC(year, month, day, hour - 8, min, sec));
+                   const parsedTimestamp = utcDate.getTime();
+                   
+                   if (!isNaN(originalTimestamp) && Math.abs(parsedTimestamp - originalTimestamp) < 1000) {
+                       timestamp = originalTimestamp;
+                   } else {
+                       timestamp = parsedTimestamp;
+                   }
+               } else {
+                   const parsedDate = new Date(formattedTimeStr);
+                   if (!isNaN(parsedDate.getTime())) {
+                       timestamp = parsedDate.getTime();
+                   }
+               }
+            }
+            
             if (relativePath && !isNaN(timestamp)) {
                parsed.push({ relativePath, timestamp, rowIndex: i + 1 });
             }
@@ -153,6 +186,21 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
         setCsvLoaded(true);
       } catch (err) {
         console.error("解析 CSV 失败:", err);
+      }
+    };
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (text.includes('\uFFFD')) {
+          // 如果出现乱码字符 (Replacement Character)，尝试使用 gbk 重新读取
+          const reader2 = new FileReader();
+          reader2.onload = (e) => {
+             parseText(e.target?.result as string);
+          };
+          reader2.readAsText(file, 'gbk');
+      } else {
+          parseText(text);
       }
     };
     reader.readAsText(file);
@@ -337,6 +385,8 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
   const [showNoChangeModal, setShowNoChangeModal] = useState(false);
   const [showUnmatchedModal, setShowUnmatchedModal] = useState(false);
 
+  const [showInjectPreview, setShowInjectPreview] = useState(false);
+
   const executeSync = () => {
     const selectedItems = Array.from(selectedPaths)
       .map(path => previewData.find(p => p.relativePath === path))
@@ -376,14 +426,7 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
       return;
     }
 
-    const injectPlan = selectedItems.map(item => ({
-      relativePath: item!.relativePath,
-      targetTimestamp: item!.targetTimestamp
-    }));
-
-    if (onInjectMetadata) {
-      onInjectMetadata(injectPlan);
-    }
+    setShowInjectPreview(true);
   };
 
   const totalPages = Math.ceil(filteredData.length / pageSize);
@@ -439,8 +482,11 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
               {processResult && (
                 <div className="w-full max-w-4xl text-center flex flex-col max-h-[80vh] overflow-hidden">
                   <div className="text-xl font-mono text-emerald-400 mb-4 tracking-wider flex-shrink-0">执行完成</div>
-                  <div className="text-sm font-mono text-slate-300 space-y-2 mb-4 flex-shrink-0">
+                  <div className="text-sm font-mono text-slate-300 flex justify-center space-x-6 mb-4 flex-shrink-0">
                     <div>成功: <span className="text-emerald-400">{processResult.data.successCount}</span></div>
+                    {(processResult.data.skippedCount || 0) > 0 && (
+                      <div>跳过: <span className="text-slate-400">{processResult.data.skippedCount}</span></div>
+                    )}
                     <div>失败: <span className="text-red-400">{processResult.data.errorCount}</span></div>
                   </div>
                   
@@ -458,6 +504,9 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                         {Array.from(selectedPaths).map((path, idx) => {
                            const isError = processResult.data.errors?.find((e: any) => e.path === path);
                            const item = previewData.find(p => p.relativePath === path);
+                           const hasMetadata = item?.timeSource === '内部元数据';
+                           const hasChanged = item?.hasChanged;
+                           const isSkipped = processResult.type === 'inject' && hasMetadata && !hasChanged;
                            
                            return (
                              <tr key={idx} className="hover:bg-slate-800/40">
@@ -465,6 +514,8 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                                <td className="py-2 px-3">
                                  {isError ? (
                                    <span className="text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded">失败</span>
+                                 ) : isSkipped ? (
+                                   <span className="text-slate-400 bg-slate-500/10 px-1.5 py-0.5 rounded">跳过</span>
                                  ) : (
                                    <span className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">成功</span>
                                  )}
@@ -472,6 +523,8 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                                <td className="py-2 px-3">
                                  {isError ? (
                                    <span className="text-red-400">{isError.error}</span>
+                                 ) : isSkipped ? (
+                                   <span className="text-slate-500">已跳过，目标时间未变更</span>
                                  ) : (
                                    <span className="text-slate-500">元数据/时间已更新为: <span className="text-emerald-400">{item?.targetDate || '未知'}</span></span>
                                  )}
@@ -519,6 +572,101 @@ export default function SyncTimePreviewModal({ isOpen, onClose, files, onExecute
                   <button onClick={() => setShowUnmatchedModal(false)} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-sm rounded-lg transition-colors border border-slate-700">
                     知道了
                   </button>
+               </div>
+            </div>
+          )}
+
+          {showInjectPreview && (
+            <div className="absolute inset-0 bg-slate-950/95 z-50 p-6 flex flex-col justify-center items-center backdrop-blur-sm">
+               <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl w-full max-w-5xl shadow-2xl max-h-[85vh] flex flex-col">
+                  <h3 className="text-lg font-mono text-slate-200 mb-2 flex items-center">
+                    <FileText className="w-5 h-5 mr-2 text-emerald-500" />
+                    写入元数据确认 (严格安全模式)
+                  </h3>
+                  <p className="text-sm font-mono text-slate-400 mb-4">
+                    系统仅修改媒体的日期元数据，<strong className="text-emerald-400">绝对不会改变任何其他信息或降低文件画质</strong>。请核对以下将要执行的动作：
+                  </p>
+                  
+                  <div className="flex-1 overflow-auto bg-slate-950 border border-slate-800 rounded p-2 custom-scrollbar">
+                    <table className="w-full text-xs font-mono text-left whitespace-nowrap">
+                       <thead className="bg-slate-900 text-slate-400 sticky top-0 border-b border-slate-800">
+                         <tr>
+                           <th className="p-2">原文件 (相对路径)</th>
+                           <th className="p-2">现有元数据状态</th>
+                           <th className="p-2">目标恢复时间</th>
+                           <th className="p-2">动作预判</th>
+                         </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-800/50">
+                         {Array.from(selectedPaths).map((path, idx) => {
+                            const item = previewData.find(p => p.relativePath === path);
+                            if (!item) return null;
+                            const hasMetadata = item.timeSource === '内部元数据';
+                            const hasChanged = item.hasChanged;
+                            
+                            let actionLabel = '';
+                            let actionColor = '';
+                            let willExecute = false;
+                            let skipReason = '';
+
+                            if (hasMetadata && !hasChanged) {
+                               actionLabel = '跳过';
+                               actionColor = 'text-slate-500';
+                               skipReason = '目标时间与当前时间一致';
+                            } else if (hasMetadata && hasChanged) {
+                               actionLabel = '修改已有元数据';
+                               actionColor = 'text-amber-400';
+                               willExecute = true;
+                            } else {
+                               actionLabel = '新创建元数据';
+                               actionColor = 'text-emerald-400';
+                               willExecute = true;
+                            }
+                            
+                            return (
+                              <tr key={idx} className="hover:bg-slate-800/40">
+                                <td className="p-2 text-slate-400 truncate max-w-[200px]" title={item.relativePath}>{item.relativePath}</td>
+                                <td className="p-2">
+                                  {hasMetadata ? <span className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">存在</span> : <span className="text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded">缺失</span>}
+                                </td>
+                                <td className="p-2 text-cyan-400">{item.targetDate}</td>
+                                <td className="p-2">
+                                   <span className={`${actionColor} ${willExecute ? 'font-bold' : ''}`}>{actionLabel}</span>
+                                   {!willExecute && <span className="text-slate-500 text-[10px] ml-2">({skipReason})</span>}
+                                </td>
+                              </tr>
+                            );
+                         })}
+                       </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-4 flex justify-end space-x-3 flex-shrink-0">
+                     <button onClick={() => setShowInjectPreview(false)} className="px-4 py-2 border border-slate-700 bg-slate-800 hover:bg-slate-700 rounded font-mono text-sm text-slate-300">
+                       取消
+                     </button>
+                     <button onClick={() => {
+                        const itemsToExecute = Array.from(selectedPaths).map(path => previewData.find(p => p.relativePath === path)).filter(Boolean);
+                        const finalPlan = itemsToExecute.filter(item => {
+                            const hasMetadata = item!.timeSource === '内部元数据';
+                            const hasChanged = item!.hasChanged;
+                            if (hasMetadata && !hasChanged) return false;
+                            return true;
+                        }).map(item => ({
+                            relativePath: item!.relativePath,
+                            targetTimestamp: item!.targetTimestamp
+                        }));
+                        
+                        const skippedCount = itemsToExecute.length - finalPlan.length;
+                        
+                        setShowInjectPreview(false);
+                        if (onInjectMetadata) {
+                           onInjectMetadata(finalPlan, skippedCount);
+                        }
+                     }} className="px-6 py-2 bg-emerald-950/50 border border-emerald-900 text-emerald-400 hover:bg-emerald-900 rounded font-mono text-sm font-bold shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                       确认安全写入
+                     </button>
+                  </div>
                </div>
             </div>
           )}

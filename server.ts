@@ -12,6 +12,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import readline from 'readline';
 import piexifjs from 'piexifjs';
+import { exiftool } from 'exiftool-vendored';
 
 const execAsync = promisify(exec);
 
@@ -361,7 +362,7 @@ async function startServer() {
                  escapeCsv(f.relativePath), 
                  escapeCsv(f.type === 'video' ? '视频' : '图片'),
                  escapeCsv(f.timestamp),
-                 escapeCsv(formattedTime),
+                 escapeCsv('\t' + formattedTime), // 防止 Excel 截断秒数
                  escapeCsv(f.timeSource || '未知')
              ].join(',');
              res.write(csvRow + '\n');
@@ -550,10 +551,11 @@ async function startServer() {
           const oldFullPath = path.join(folderPath, item.relativePath);
           const ext = path.extname(item.originalName);
           
-          const d = new Date(item.timestamp);
+          // 统一使用 UTC+8 (北京时间) 作为重命名的本地时间，避免不同运行环境时区不一致
+          const localD = new Date(item.timestamp + 8 * 60 * 60 * 1000);
           const pad = (n: number) => n.toString().padStart(2, '0');
           const typeStr = item.type === 'video' ? 'VID' : 'IMG';
-          const newBaseName = `${typeStr}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+          const newBaseName = `${typeStr}_${localD.getUTCFullYear()}${pad(localD.getUTCMonth() + 1)}${pad(localD.getUTCDate())}_${pad(localD.getUTCHours())}${pad(localD.getUTCMinutes())}${pad(localD.getUTCSeconds())}`;
           
           const dirName = path.dirname(oldFullPath);
           
@@ -608,7 +610,7 @@ async function startServer() {
 
     try {
       globalCancelRequested = false;
-      const { folderPath, taskId, total, injectPlan } = req.body;
+      const { folderPath, taskId, total, injectPlan, skippedCount } = req.body;
       const injectMap = new Map<string, number>();
       
       // 如果前端传递了需要注入的列表及其目标时间
@@ -683,60 +685,28 @@ async function startServer() {
 
           // 优先使用前端传递的 targetTimestamp
           const targetTimestamp = injectMap.has(item.relativePath) ? injectMap.get(item.relativePath)! : item.timestamp;
-          const d = new Date(targetTimestamp);
           
-          if (item.type === 'image') {
-              const ext = path.extname(fullPath).toLowerCase();
-              if (['.jpg', '.jpeg'].includes(ext)) {
-                  // piexifjs requires binary string
-                  const fileData = await fsPromises.readFile(fullPath, 'binary');
-                  let exifObj;
-                  try {
-                      exifObj = piexifjs.load(fileData);
-                  } catch (e) {
-                      exifObj = { '0th': {}, 'Exif': {}, 'GPS': {}, '1st': {}, 'Interop': {} };
-                  }
-                  
-                  // Format: YYYY:MM:DD HH:mm:ss
-                  const pad = (n: number) => n.toString().padStart(2, '0');
-                  const exifDateStr = `${d.getFullYear()}:${pad(d.getMonth() + 1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-                  
-                  exifObj['0th'][piexifjs.ImageIFD.DateTime] = exifDateStr;
-                  exifObj['Exif'][piexifjs.ExifIFD.DateTimeOriginal] = exifDateStr;
-                  exifObj['Exif'][piexifjs.ExifIFD.DateTimeDigitized] = exifDateStr;
-                  
-                  const exifBytes = piexifjs.dump(exifObj);
-                  const newData = piexifjs.insert(exifBytes, fileData);
-                  
-                  const buffer = Buffer.from(newData, 'binary');
-                  await fsPromises.writeFile(fullPath, buffer);
-              } else {
-                  throw new Error(`暂不支持该图片格式的元数据注入: ${ext}`);
-              }
-          } else if (item.type === 'video') {
-              const ext = path.extname(fullPath).toLowerCase();
-              if (['.mp4', '.mov'].includes(ext)) {
-                  const tempPath = fullPath + '_temp' + ext;
-                  const isoString = d.toISOString();
-                  
-                  await new Promise((resolve, reject) => {
-                      ffmpeg(fullPath)
-                          .outputOptions([
-                              '-c', 'copy',
-                              '-map', '0:v', '-map', '0:a?', '-map', '0:s?',
-                              '-metadata', `creation_time=${isoString}`
-                          ])
-                          .output(tempPath)
-                          .on('end', () => resolve(true))
-                          .on('error', (err, stdout, stderr) => reject(new Error(`${err.message} stderr: ${stderr}`)))
-                          .run();
-                  });
-                  
-                  await fsPromises.rename(tempPath, fullPath);
-              } else {
-                  throw new Error(`暂不支持该视频格式的元数据注入: ${ext}`);
-              }
+          const ext = path.extname(item.originalName).toLowerCase();
+          const isVideo = ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext);
+          
+          const pad = (n: number) => n.toString().padStart(2, '0');
+          let formattedDate = '';
+          
+          if (isVideo) {
+              // 对于视频：MP4/QuickTime的 creation_time 标准为 UTC 时间。
+              // ffprobe 读取时也会将其视为 UTC。因此我们必须写入 UTC 时间，避免写入本地时间时受到宿主环境时区的影响。
+              const d = new Date(targetTimestamp);
+              formattedDate = `${d.getUTCFullYear()}:${pad(d.getUTCMonth() + 1)}:${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+          } else {
+              // 对于图片：EXIF 的 DateTimeOriginal 没有时区概念，通常表示本地时间。
+              // 系统前端和导出逻辑默认以 UTC+8 (北京时间) 为本地时间，因此我们加上 8 小时偏移写入。
+              const localD = new Date(targetTimestamp + 8 * 60 * 60 * 1000);
+              formattedDate = `${localD.getUTCFullYear()}:${pad(localD.getUTCMonth() + 1)}:${pad(localD.getUTCDate())} ${pad(localD.getUTCHours())}:${pad(localD.getUTCMinutes())}:${pad(localD.getUTCSeconds())}`;
           }
+          
+          // 使用 exiftool-vendored 严格只修改时间元数据
+          // AllDates 将更新诸如 DateTimeOriginal, CreateDate, ModifyDate 等，完全保留其它元数据不变
+          await exiftool.write(fullPath, { AllDates: formattedDate }, ['-overwrite_original']);
           
           successCount++;
         } catch (err: any) {
@@ -752,7 +722,7 @@ async function startServer() {
         }
       }
 
-      sendEvent({ type: 'done', successCount, errorCount, errors, stopped: isStopped });
+      sendEvent({ type: 'done', successCount, errorCount, errors, stopped: isStopped, skippedCount: skippedCount || 0 });
       if (taskId) tasks.delete(taskId);
       res.end();
     } catch (err: any) {

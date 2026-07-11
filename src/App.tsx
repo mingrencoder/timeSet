@@ -269,12 +269,13 @@ export default function App() {
     executeStreamOp('/api/rename-files', { folderPath: result?.folderPath, renamePlan, total: renamePlan.length || result?.total }, 'rename');
   };
 
-  const handleExecuteInjectFromModal = (injectPlan: any[]) => {
+  const handleExecuteInjectFromModal = (injectPlan: any[], skippedCount: number = 0) => {
     setLastExecutedPlan(injectPlan);
     executeStreamOp('/api/inject-metadata', { 
       folderPath: result?.folderPath, 
       injectPlan: injectPlan,
-      total: injectPlan.length 
+      total: injectPlan.length,
+      skippedCount: skippedCount
     }, 'inject');
   };
 
@@ -583,7 +584,12 @@ export default function App() {
                     {processResult.type === 'sync' ? '时间同步完成' : processResult.type === 'rename' ? '重命名完成' : '深度写入元数据完成'}
                     {processResult.data.stopped ? ' (已终止)' : ''}
                   </p>
-                  <p className="mt-1 text-emerald-500/80 text-xs">成功: {processResult.data.successCount}</p>
+                  <div className="mt-1 flex space-x-4 text-xs">
+                    <span className="text-emerald-500/80">成功: {processResult.data.successCount}</span>
+                    {(processResult.data.skippedCount || 0) > 0 && (
+                      <span className="text-slate-400">跳过: {processResult.data.skippedCount}</span>
+                    )}
+                  </div>
                   {processResult.data.errorCount > 0 && (
                     <p className="text-red-400 mt-1 text-xs">失败: {processResult.data.errorCount} (详见控制台)</p>
                   )}
