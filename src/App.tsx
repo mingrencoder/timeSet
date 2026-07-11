@@ -438,21 +438,14 @@ export default function App() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-4">
           <div className="flex items-baseline space-x-3 mb-4 sm:mb-0">
-            <h1 className="text-2xl font-mono font-bold text-slate-100 tracking-tight">TimeSet 媒体时间管理 <span className="text-cyan-500 animate-pulse">//</span></h1>
+            <h1 className="text-2xl font-mono font-bold text-slate-100 tracking-tight">媒体时间管理 <span className="text-cyan-500 animate-pulse">//</span></h1>
           </div>
-          <div className="flex items-center space-x-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded text-xs font-mono">
-            {(loading || processing) ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></span>
-                <span className="text-cyan-400 tracking-widest">正在扫描...</span>
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-slate-600"></span>
-                <span className="text-slate-500 tracking-widest">系统空闲</span>
-              </>
-            )}
-          </div>
+          {(loading || processing) && (
+            <div className="flex items-center space-x-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded text-xs font-mono">
+              <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></span>
+              <span className="text-cyan-400 tracking-widest">工作进行中...</span>
+            </div>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -464,7 +457,7 @@ export default function App() {
               onChange={(e) => setInputPath(e.target.value)}
               disabled={loading}
               placeholder="请输入文件夹绝对路径 (例如: /Users/xxx/Movies 或 D:\Media)"
-              className="flex-1 bg-transparent border-none text-slate-200 font-mono py-3 outline-none placeholder-slate-700 disabled:opacity-50 w-full"
+              className="flex-1 bg-transparent border-none text-slate-200 font-mono py-3 outline-none placeholder-slate-500 disabled:opacity-50 w-full"
             />
           </div>
           
@@ -477,7 +470,7 @@ export default function App() {
              <button
                onClick={handleScan}
                disabled={!inputPath.trim()}
-               className="w-full py-3 bg-cyan-400 text-slate-950 border border-cyan-400 rounded-lg font-mono tracking-widest hover:bg-cyan-300 hover:shadow-[0_0_15px_rgba(6,182,212,0.6)] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-30 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-slate-700 disabled:cursor-not-allowed transition-all flex justify-center items-center font-bold"
+               className="w-full py-3 bg-cyan-400 text-slate-950 border border-cyan-400 rounded-lg font-mono tracking-widest hover:bg-cyan-300 hover:shadow-[0_0_15px_rgba(6,182,212,0.6)] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-70 disabled:bg-slate-800 disabled:text-slate-300 disabled:border-slate-700 disabled:cursor-not-allowed transition-all flex justify-center items-center font-bold"
              >
                <MonitorUp className="w-4 h-4 mr-2" />
                开始扫描本地文件夹
