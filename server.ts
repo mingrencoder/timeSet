@@ -731,6 +731,26 @@ async function startServer() {
     }
   });
 
+  app.post('/api/metadata', async (req: express.Request, res: express.Response): Promise<any> => {
+    try {
+      const { fullPath } = req.body;
+      if (!fullPath || typeof fullPath !== 'string') {
+        return res.status(400).json({ error: '请提供有效的文件路径' });
+      }
+
+      if (!fs.existsSync(fullPath)) {
+        return res.status(404).json({ error: '文件不存在' });
+      }
+
+      // Use exiftool to get all metadata
+      const metadata = await exiftool.read(fullPath);
+      res.json({ metadata });
+    } catch (err: any) {
+      console.error('Failed to get metadata:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/parse', upload.single('file'), async (req: express.Request, res: express.Response): Promise<any> => {
     try {
       const localPath = req.body.localPath;

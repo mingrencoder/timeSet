@@ -16,13 +16,22 @@ const formatTime = (isoString: string) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 
-const TreeNode: React.FC<{ node: any, level?: number, selectedFiles?: Set<string>, onToggleSelect?: (path: string) => void }> = ({ node, level = 0, selectedFiles, onToggleSelect }) => {
+const TreeNode: React.FC<{ node: any, level?: number, selectedFiles?: Set<string>, onToggleSelect?: (path: string) => void, onFileClick?: (file: any) => void, activeFile?: any }> = ({ node, level = 0, selectedFiles, onToggleSelect, onFileClick, activeFile }) => {
   const [isOpen, setIsOpen] = useState(true);
 
   if (node.isFile) {
     const isSelected = selectedFiles?.has(node.original.relativePath);
+    const isActive = activeFile?.relativePath === node.original.relativePath;
     return (
-      <div className="flex items-center justify-between text-xs py-2 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors group" style={{ paddingLeft: `${level * 20 + 20}px` }}>
+      <div 
+        className={`flex items-center justify-between text-xs py-2 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors group cursor-pointer ${isActive ? 'bg-slate-800/80 border-cyan-800' : ''}`} 
+        style={{ paddingLeft: `${level * 20 + 20}px` }}
+        onClick={(e) => {
+          // If clicked on the checkbox, don't trigger file click
+          if ((e.target as HTMLElement).tagName === 'INPUT') return;
+          onFileClick && onFileClick(node.original);
+        }}
+      >
         <div className="flex items-center min-w-0 pr-4">
           <input 
             type="checkbox" 
@@ -64,13 +73,127 @@ const TreeNode: React.FC<{ node: any, level?: number, selectedFiles?: Set<string
       {isOpen && (
         <div className="mt-1">
           {Object.values(node.children).map((child: any, idx) => (
-            <TreeNode key={idx} node={child} level={level + 1} selectedFiles={selectedFiles} onToggleSelect={onToggleSelect} />
+            <TreeNode key={idx} node={child} level={level + 1} selectedFiles={selectedFiles} onToggleSelect={onToggleSelect} onFileClick={onFileClick} activeFile={activeFile} />
           ))}
         </div>
       )}
     </div>
   );
 };
+
+const METADATA_GROUPS = [
+  {
+    name: '基础信息',
+    keys: {
+      FileSize: '文件大小',
+      FileType: '文件类型',
+      MIMEType: 'MIME类型',
+      ImageWidth: '图片宽度',
+      ImageHeight: '图片高度',
+      ImageSize: '尺寸',
+      Duration: '视频时长',
+      Megapixels: '像素(百万)',
+      VideoFrameRate: '帧率',
+    }
+  },
+  {
+    name: '设备信息',
+    keys: {
+      Make: '制造商',
+      Model: '设备型号',
+      Software: '软件版本',
+      Orientation: '方向',
+      LensMake: '镜头制造商',
+      LensModel: '镜头型号',
+    }
+  },
+  {
+    name: '拍摄参数',
+    keys: {
+      ExposureTime: '曝光时间',
+      FNumber: '光圈值',
+      ISO: 'ISO',
+      FocalLength: '焦距',
+      ShutterSpeed: '快门速度',
+      Aperture: '光圈',
+      Flash: '闪光灯',
+      WhiteBalance: '白平衡',
+      ExposureMode: '曝光模式',
+    }
+  },
+  {
+    name: '定位信息',
+    keys: {
+      GPSLatitude: '纬度',
+      GPSLongitude: '经度',
+      GPSAltitude: '海拔',
+      GPSPosition: 'GPS位置',
+    }
+  },
+  {
+    name: '日期时间',
+    keys: {
+      CreateDate: '创建时间',
+      ModifyDate: '修改时间',
+      DateTimeOriginal: '原始拍摄时间',
+      FileModifyDate: '文件修改时间',
+      FileAccessDate: '文件访问时间',
+    }
+  }
+];
+
+function formatMetadataValue(value: any): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'object') return String(value);
+  if (value.rawValue !== undefined) return String(value.rawValue);
+  if (value.year !== undefined) {
+    return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')} ${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}:${String(value.second).padStart(2, '0')}`;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function getGroupedMetadata(metadata: any) {
+  if (!metadata) return [];
+  
+  const resultGroups: { name: string, items: { label: string, value: string, originalKey: string }[] }[] = [];
+  const usedKeys = new Set<string>();
+
+  METADATA_GROUPS.forEach(g => {
+    const items: { label: string, value: string, originalKey: string }[] = [];
+    Object.entries(g.keys).forEach(([key, label]) => {
+      if (metadata[key] !== undefined && metadata[key] !== null) {
+        items.push({ label, value: formatMetadataValue(metadata[key]), originalKey: key });
+        usedKeys.add(key);
+      }
+    });
+    if (items.length > 0) {
+      resultGroups.push({ name: g.name, items });
+    }
+  });
+
+  const otherItems: { label: string, value: string, originalKey: string }[] = [];
+  const ignorePrefixes = ['Directory', 'FilePermissions', 'FileName', 'ExifTool', 'SourceFile', 'Error', 'Warning'];
+  
+  Object.keys(metadata).forEach(key => {
+    if (!usedKeys.has(key) && !ignorePrefixes.some(prefix => key.startsWith(prefix))) {
+      const val = metadata[key];
+      if (val !== undefined && val !== null) {
+         if (typeof val === 'object' && !val.rawValue && !val.year) return; // Skip complex unparseable nested objects
+         otherItems.push({ label: key, value: formatMetadataValue(val), originalKey: key });
+      }
+    }
+  });
+
+  if (otherItems.length > 0) {
+    resultGroups.push({ name: '其他信息', items: otherItems });
+  }
+
+  return resultGroups;
+}
 
 export default function App() {
   const [loading, setLoading] = useState(false);
@@ -83,6 +206,12 @@ export default function App() {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
+  
+  // 新增元数据查看状态
+  const [activeFile, setActiveFile] = useState<any | null>(null);
+  const [activeMetadata, setActiveMetadata] = useState<any | null>(null);
+  const [loadingMetadata, setLoadingMetadata] = useState(false);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
   
   const sortedResults = useMemo(() => {
     if (!result?.results) return [];
@@ -159,6 +288,29 @@ export default function App() {
       setTaskState(action === 'pause' ? 'paused' : 'running');
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleFileClick = async (file: any) => {
+    setActiveFile(file);
+    setLoadingMetadata(true);
+    setMetadataError(null);
+    setActiveMetadata(null);
+    
+    try {
+      const fullPath = result ? `${result.folderPath}/${file.relativePath}`.replace(/\/\//g, '/') : file.relativePath;
+      const res = await fetch('/api/metadata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullPath })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '获取元数据失败');
+      setActiveMetadata(data.metadata);
+    } catch (err: any) {
+      setMetadataError(err.message);
+    } finally {
+      setLoadingMetadata(false);
     }
   };
 
@@ -433,10 +585,11 @@ export default function App() {
   }, [result, selectedFiles]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-300 flex flex-col p-4 sm:p-8 font-sans">
-      <div className="w-full max-w-6xl mx-auto space-y-6">
-        
-        {/* Header */}
+    <div className="min-h-screen bg-slate-950 text-slate-300 flex justify-center p-4 sm:p-8 font-sans overflow-x-hidden">
+      <div className={`flex flex-col xl:flex-row w-full transition-all duration-300 items-start gap-6 ${activeFile ? 'max-w-[1500px]' : 'max-w-6xl'}`}>
+        <div className="w-full flex-1 space-y-6 min-w-0">
+          
+          {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-4">
           <div className="flex items-baseline space-x-3 mb-4 sm:mb-0">
             <h1 className="text-2xl font-mono font-bold text-slate-100 tracking-tight">媒体时间管理 <span className="text-cyan-500 animate-pulse">//</span></h1>
@@ -671,7 +824,14 @@ export default function App() {
                         <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-500 font-mono tracking-widest">该目录下尚未解析到媒体文件或符合条件的文件</td></tr>
                       )}
                       {paginatedResults.map((item, idx) => (
-                        <tr key={idx} className="hover:bg-slate-800/40 transition-colors group">
+                        <tr 
+                          key={idx} 
+                          className={`hover:bg-slate-800/60 transition-colors group cursor-pointer ${activeFile?.relativePath === item.relativePath ? 'bg-slate-800/80' : ''}`}
+                          onClick={(e) => {
+                            if ((e.target as HTMLElement).tagName === 'INPUT') return;
+                            handleFileClick(item);
+                          }}
+                        >
                           <td className="px-4 py-2.5 text-center">
                             <input 
                               type="checkbox" 
@@ -710,7 +870,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="p-4 max-h-[500px] overflow-y-auto custom-scrollbar">
-                  {treeData && <TreeNode node={treeData} selectedFiles={selectedFiles} onToggleSelect={handleToggleSelect} />}
+                  {treeData && <TreeNode node={treeData} selectedFiles={selectedFiles} onToggleSelect={handleToggleSelect} onFileClick={handleFileClick} activeFile={activeFile} />}
                 </div>
               )}
             </div>
@@ -787,6 +947,49 @@ export default function App() {
             onClearResult={handleClearResult}
           />
         )}
+      </div>
+
+      {activeFile && (
+        <div className="w-full xl:w-80 flex-shrink-0 bg-slate-900 border border-slate-800 rounded-xl p-4 sticky top-8 max-h-[calc(100vh-4rem)] flex flex-col shadow-2xl transition-all duration-300 transform translate-x-0 z-20">
+          <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-3">
+            <h2 className="text-sm font-mono font-bold text-slate-200 truncate pr-2" title={activeFile.originalName}>
+              {activeFile.originalName}
+            </h2>
+            <button onClick={() => setActiveFile(null)} className="text-slate-500 hover:text-slate-300 transition-colors">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4 text-xs font-mono">
+            {loadingMetadata ? (
+              <div className="flex flex-col items-center justify-center h-40 space-y-3 text-cyan-500">
+                <span className="w-6 h-6 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin"></span>
+                <span className="tracking-widest opacity-80">加载元数据...</span>
+              </div>
+            ) : metadataError ? (
+              <div className="text-red-400 bg-red-950/30 p-3 rounded border border-red-900/50 leading-relaxed">
+                {metadataError}
+              </div>
+            ) : activeMetadata ? (
+              getGroupedMetadata(activeMetadata).map((group, gIdx) => (
+                <div key={gIdx} className="mb-4 last:mb-0">
+                  <h3 className="text-cyan-400 font-bold mb-2 pb-1 border-b border-slate-700/50 sticky top-0 bg-slate-900 z-10">{group.name}</h3>
+                  <div className="space-y-2">
+                    {group.items.map((item, iIdx) => (
+                      <div key={iIdx} className="flex flex-col border-b border-slate-800/50 pb-1.5 last:border-0">
+                        <span className="text-slate-500 mb-0.5 break-all">{item.label} <span className="text-slate-600 text-[10px]">({item.originalKey})</span></span>
+                        <span className="text-slate-300 break-all">{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-slate-500 text-center mt-10">暂无数据</div>
+            )}
+          </div>
+        </div>
+      )}
       </div>
     </div>
   );
